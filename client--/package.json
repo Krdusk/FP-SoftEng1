@@ -1,0 +1,32 @@
+{
+  "name": "client--",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node backend/server.js",
+    "build": "npm run build:client && npm run build:server",
+    "build:client": "vite build --outDir dist/client",
+    "build:server": "vite build --ssr src/entry-server.jsx --outDir dist/server",
+    "preview": "cross-env NODE_ENV=production node backend/server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "compression": "^1.8.1",
+    "dotenv": "^18.0.3",
+    "express": "^5.2.1",
+    "lucide-react": "^1.47.0",
+    "mongodb": "^7.6.0",
+    "multer": "^2.4.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "sharp": "^0.35.4",
+    "sirv": "^3.0.2",
+    "tesseract.js": "^7.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.1.1",
+    "cross-env": "^10.1.0",
+    "vite": "^8.2.2"
+  }
+}

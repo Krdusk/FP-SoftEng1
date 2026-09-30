@@ -1,0 +1,18 @@
+{
+  "username": "presentation_demo",
+  "email": "presentation@example.com",
+  "passwordHash": "$2b$12$VBg0Gdu91GPhT9RKBPh0B.Raz94jRB1Rxbpk6iBH7t1q8mJa9zWaS",
+  "profile": {
+    "profile_name": "Presentation Demo",
+    "reg_username": "presentation_demo",
+    "profile_email": "presentation@example.com",
+    "profile_course": "Computer Science",
+    "profile_year": "First year"
+  },
+  "subjects": [],
+  "schedule": [],
+  "constraints": {},
+  "lockedSections": [],
+  "createdAt": { "$date": "2026-01-01T00:00:00.000Z" },
+  "updatedAt": { "$date": "2026-01-01T00:00:00.000Z" }
+}

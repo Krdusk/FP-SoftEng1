@@ -1,0 +1,18 @@
+{
+  "$jsonSchema": {
+    "bsonType": "object",
+    "required": ["username", "email", "passwordHash", "profile", "subjects", "schedule", "constraints", "lockedSections"],
+    "properties": {
+      "username": { "bsonType": "string", "description": "Unique, normalized login name" },
+      "email": { "bsonType": "string", "description": "Unique, normalized email address" },
+      "passwordHash": { "bsonType": "string", "description": "bcrypt hash only; never a plaintext password" },
+      "profile": { "bsonType": "object" },
+      "subjects": { "bsonType": "array" },
+      "schedule": { "bsonType": "array" },
+      "constraints": { "bsonType": "object" },
+      "lockedSections": { "bsonType": "array" },
+      "createdAt": { "bsonType": "date" },
+      "updatedAt": { "bsonType": "date" }
+    }
+  }
+}

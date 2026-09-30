@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>MyTerm · Admin</title>
+    <link rel="stylesheet" href="/admin/admin.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section id="login-panel" class="login-panel">
+        <div class="brand-mark">MT</div>
+        <p class="brand-name">MyTerm</p>
+        <p class="brand-tagline">May the Schedule, be with you.</p>
+        <p class="eyebrow">Administration portal</p>
+        <h1>Welcome back, Admin</h1>
+        <p class="muted">Sign in to view student accounts, entered subjects, and saved schedules from the planner database.</p>
+        <div class="login-preview" aria-label="Admin dashboard contents">
+          <div><span class="preview-icon">01</span><span><strong>Student accounts</strong><small>Names, emails, and course details</small></span></div>
+          <div><span class="preview-icon">02</span><span><strong>Planner activity</strong><small>Subjects and saved weekly schedules</small></span></div>
+        </div>
+        <form id="login-form">
+          <label>Username<input name="username" autocomplete="username" placeholder="Admin username" required /></label>
+          <label>Password<input name="password" type="password" autocomplete="current-password" placeholder="Admin password" required /></label>
+          <button class="primary" type="submit"><span>Sign in to admin</span><span aria-hidden="true">→</span></button>
+        </form>
+        <p class="login-footnote">Admin sign-in only. Student accounts are created in the planner; if no one has registered yet, the dashboard will show no users.</p>
+        <p id="login-error" class="error" role="alert"></p>
+      </section>
+
+      <section id="dashboard" class="dashboard" hidden>
+        <header class="topbar">
+          <div><p class="eyebrow">MyTerm</p><h1>Admin overview</h1><p class="dashboard-tagline">May the Schedule, be with you.</p></div>
+          <button id="logout-button" class="secondary" type="button">Sign out</button>
+        </header>
+        <div class="stats">
+          <article class="stat-card"><span>Registered users</span><strong id="user-count">0</strong></article>
+          <article class="stat-card"><span>Subjects added</span><strong id="subject-count">0</strong></article>
+          <article class="stat-card"><span>Scheduled classes</span><strong id="class-count">0</strong></article>
+        </div>
+        <div class="content-grid">
+          <section class="card users-card">
+            <div class="card-heading"><div><p class="eyebrow">Accounts</p><h2>Registered users</h2></div><button id="refresh-button" class="secondary" type="button">Refresh</button></div>
+            <p id="dashboard-error" class="error" role="alert"></p>
+            <div id="user-list" class="user-list"></div>
+          </section>
+          <section class="card detail-card">
+            <div id="user-detail" class="empty-detail"><div class="detail-icon">↗</div><h2>Select an account</h2><p class="muted">Review its profile, entered subjects, and saved schedule.</p></div>
+          </section>
+        </div>
+        <footer>Read-only account overview · Passwords and password hashes are never displayed</footer>
+      </section>
+    </main>
+    <script type="module" src="/admin/admin.js"></script>
+  </body>
+</html>
