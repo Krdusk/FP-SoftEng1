@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "index.js": {
-      "includeFiles": ["dist/**", "backend/admin/**", "eng.traineddata"],
+      "includeFiles": "{dist/**,backend/admin/**,eng.traineddata}",
       "maxDuration": 60
     }
   },
