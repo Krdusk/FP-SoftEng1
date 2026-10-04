@@ -85,20 +85,13 @@ Requirements: Node.js `20.19+` or `22.12+`, npm, and a running MongoDB server.
 
 ## Deploy
 
-Deploy the app as a **Node.js web service**. It cannot run as a static-only frontend because the same server provides the API, authentication, image reader, and admin dashboard.
+Deploy the app to **Vercel** as a Node.js function. The Express server provides the API, authentication, image reader, and admin dashboard.
 
-1. In the hosting service settings, set the service's **Root Directory** to `client--`.
-2. Use the following commands:
+1. Import the GitHub repository into Vercel and set **Root Directory** to `client--`.
+2. Set **Install Command** to `npm ci` and **Build Command** to `npm run build:vercel`. The Vercel config and `index.js` entry point are in `client--/`.
+3. In Vercel's **Environment Variables**, add:
 
    ```text
-   Install: npm ci
-   Build:   npm run build
-   Start:   npm run preview
-   ```
-
-3. Add environment variables in the hosting provider's secret settings:
-
-   ```dotenv
    MONGODB_URI=<hosted MongoDB connection string>
    MONGODB_DB=student_planner
    ADMIN_USERNAME=<admin username>
@@ -106,11 +99,9 @@ Deploy the app as a **Node.js web service**. It cannot run as a static-only fron
    GEMINI_API_KEY=<optional Gemini API key>
    ```
 
-   Use a MongoDB instance reachable from the app host. The local address `127.0.0.1` only works if MongoDB runs on that same server. Do not commit `.env`, passwords, database credentials, or API keys.
+   Use MongoDB Atlas or another database reachable from Vercel. The local address `127.0.0.1` only works on the computer running MongoDB. Set Atlas network access to allow Vercel connections. Keep credentials and API keys in Vercel's environment settings; do not commit them.
 
-4. Open the service's public URL. The planner is at `/`, the admin dashboard is at `/admin`, and `/api/health` reports server/storage status.
-
-The current app stores login sessions in server memory. Restarts will log users out; deploy one app instance unless shared session storage is added.
+4. Deploy, then open the Vercel URL. The planner is at `/`, the admin dashboard is at `/admin`, and `/api/health` reports server/storage status. Vercel login sessions are stored in MongoDB and expire automatically.
 
 ## Database
 
@@ -118,6 +109,7 @@ The default database is `student_planner`.
 
 • `users` stores account credentials (bcrypt hash only), profile, subjects, constraints, and planner schedule.
 • `schedules` stores a schedule mirror keyed by username for convenient inspection in Compass.
+• `sessions` stores hashed, expiring login tokens for serverless deployments.
 
 See [`client--/database/README.md`](client--/database/README.md) for the schema and presentation demo account instructions.
 

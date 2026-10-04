@@ -6,21 +6,19 @@ import fs from 'node:fs/promises'
 import express from 'express'
 import { Transform } from 'node:stream'
 import path from 'node:path'
-import { randomBytes } from 'node:crypto'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import bcrypt from 'bcryptjs'
 import { buildSchedulePlan } from '../src/scheduler.js'
-import { authenticateUser, deleteAdminUser, getAccount, getAdminAnalytics, getAdminUser, listAdminUsers, normalizeUsername, registerUser, savePlannerState, storageMode, updateAdminUser } from './data/store.js'
+import { authenticateUser, createSession, deleteAdminUser, deleteSession, deleteUserSessions, getAccount, getAdminAnalytics, getAdminUser, getSession, listAdminUsers, normalizeUsername, registerUser, savePlannerState, storageMode, updateAdminUser } from './data/store.js'
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const isProduction = process.env.NODE_ENV === 'production'
+const isVercel = Boolean(process.env.VERCEL)
+const isProduction = process.env.NODE_ENV === 'production' || isVercel
 const port = process.env.PORT || 5173
 const base = process.env.BASE || '/'
 const adminEnabled = process.env.ADMIN_ENABLED !== 'false'
 const ABORT_DELAY = 10000
-const adminSessions = new Map()
 const ADMIN_SESSION_LIFETIME = 2 * 60 * 60 * 1000
-const userSessions = new Map()
 const USER_SESSION_LIFETIME = 12 * 60 * 60 * 1000
 
 const templateHtml = isProduction
@@ -33,7 +31,7 @@ app.use(express.json())
 const upload = multer({
   dest: path.join(os.tmpdir(), 'class-schedule-ocr'),
   limits: {
-    fileSize: 10 * 1024 * 1024,
+    fileSize: isVercel ? 4 * 1024 * 1024 : 10 * 1024 * 1024,
     files: 1,
   },
   fileFilter: (_req, file, callback) => {
@@ -71,20 +69,19 @@ const uploadScheduleImage = (req, res, next) => {
   })
 }
 
-const issueUserSession = (username) => {
-  const token = randomBytes(32).toString('hex')
-  userSessions.set(token, { username: normalizeUsername(username), expiresAt: Date.now() + USER_SESSION_LIFETIME })
-  return token
-}
-
-const requireUser = (req, res, next) => {
+const requireUser = async (req, res, next) => {
   const token = req.get('authorization')?.replace(/^Bearer\s+/i, '')
-  const session = token ? userSessions.get(token) : null
-  if (!session || session.expiresAt < Date.now()) {
-    if (token) userSessions.delete(token)
+  let session
+  try {
+    session = token ? await getSession(token, 'user') : null
+  } catch (error) {
+    console.error(error)
+    return res.status(503).json({ ok: false, error: 'Session storage is unavailable. Check the MongoDB connection.' })
+  }
+  if (!session) {
     return res.status(401).json({ ok: false, error: 'Your session expired. Please sign in again.' })
   }
-  req.userSession = { token, ...session }
+  req.userSession = { token, username: session.username }
   next()
 }
 
@@ -104,8 +101,7 @@ app.post('/api/admin/login', async (req, res) => {
     if (String(username || '').trim() !== expectedUsername || !password || !(await bcrypt.compare(password, passwordHash))) {
       return res.status(401).json({ error: 'Invalid admin username or password.' })
     }
-    const token = randomBytes(32).toString('hex')
-    adminSessions.set(token, Date.now() + ADMIN_SESSION_LIFETIME)
+    const token = await createSession(expectedUsername, 'admin', ADMIN_SESSION_LIFETIME)
     res.json({ ok: true, token, expiresIn: ADMIN_SESSION_LIFETIME })
   } catch (error) {
     console.error(error)
@@ -113,19 +109,25 @@ app.post('/api/admin/login', async (req, res) => {
   }
 })
 
-const requireAdmin = (req, res, next) => {
+const requireAdmin = async (req, res, next) => {
   if (!adminEnabled) return res.sendStatus(404)
   const token = req.get('authorization')?.replace(/^Bearer\s+/i, '')
-  const expiresAt = token ? adminSessions.get(token) : null
-  if (!expiresAt || expiresAt < Date.now()) {
-    if (token) adminSessions.delete(token)
+  let session
+  try {
+    session = token ? await getSession(token, 'admin') : null
+  } catch (error) {
+    console.error(error)
+    return res.status(503).json({ error: 'Admin session storage is unavailable. Check the MongoDB connection.' })
+  }
+  if (!session) {
     return res.status(401).json({ error: 'Admin session expired. Sign in again.' })
   }
+  req.adminSession = { token, username: session.username }
   next()
 }
 
-app.post('/api/admin/logout', requireAdmin, (req, res) => {
-  adminSessions.delete(req.get('authorization').replace(/^Bearer\s+/i, ''))
+app.post('/api/admin/logout', requireAdmin, async (req, res) => {
+  await deleteSession(req.adminSession.token)
   res.json({ ok: true })
 })
 
@@ -175,9 +177,7 @@ app.delete('/api/admin/users/:username', requireAdmin, async (req, res) => {
   try {
     const deleted = await deleteAdminUser(req.params.username)
     if (!deleted) return res.status(404).json({ error: 'User not found.' })
-    for (const [token, session] of userSessions) {
-      if (session.username === normalizeUsername(req.params.username)) userSessions.delete(token)
-    }
+    await deleteUserSessions(req.params.username)
     res.json({ ok: true })
   } catch (error) {
     console.error(error)
@@ -192,7 +192,8 @@ app.get('/api/health', (req, res) => {
 app.post('/api/auth/register', async (req, res) => {
   try {
     const user = await registerUser(req.body || {})
-    res.status(201).json({ ok: true, user, token: issueUserSession(user.username) })
+    const token = await createSession(user.username, 'user', USER_SESSION_LIFETIME)
+    res.status(201).json({ ok: true, user, token })
   } catch (error) {
     const status = error.message.includes('already registered') ? 409
       : error.message.includes('Name, username') || error.message.includes('Password must') ? 400
@@ -207,15 +208,16 @@ app.post('/api/auth/login', async (req, res) => {
     const { identifier, password } = req.body || {}
     const user = await authenticateUser(identifier, password)
     if (!user) return res.status(401).json({ ok: false, error: 'Invalid username/email or password.' })
-    res.json({ ok: true, user, token: issueUserSession(user.username) })
+    const token = await createSession(user.username, 'user', USER_SESSION_LIFETIME)
+    res.json({ ok: true, user, token })
   } catch (error) {
     console.error(error)
     res.status(503).json({ ok: false, error: 'Authentication service unavailable. Check the MongoDB connection and server configuration.' })
   }
 })
 
-app.post('/api/auth/logout', requireUser, (req, res) => {
-  userSessions.delete(req.userSession.token)
+app.post('/api/auth/logout', requireUser, async (req, res) => {
+  await deleteSession(req.userSession.token)
   res.json({ ok: true })
 })
 
@@ -462,6 +464,10 @@ app.use('*all', async (req, res) => {
   }
 })
 
-app.listen(port, () => {
-  console.log(`Server started at http://localhost:${port} (${storageMode} storage)`)
-})
+if (!isVercel) {
+  app.listen(port, () => {
+    console.log(`Server started at http://localhost:${port} (${storageMode} storage)`)
+  })
+}
+
+export default app

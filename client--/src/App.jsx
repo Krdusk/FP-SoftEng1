@@ -42,6 +42,38 @@ const toMinutes = (value) => {
   return hours * 60 + minutes
 }
 
+const optimizeScheduleImage = async (file) => {
+  const targetBytes = 3_700_000
+  if (file.size <= targetBytes) return file
+  if (typeof createImageBitmap !== 'function') throw new Error('This image is larger than the online upload limit. Crop or resize it, then try again.')
+
+  const bitmap = await createImageBitmap(file)
+  try {
+    let scale = Math.min(1, 2800 / Math.max(bitmap.width, bitmap.height))
+    for (let resizeAttempt = 0; resizeAttempt < 5; resizeAttempt += 1) {
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale))
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale))
+      const context = canvas.getContext('2d', { alpha: false })
+      if (!context) throw new Error('This browser could not prepare the schedule image for upload.')
+      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+
+      for (const quality of [0.88, 0.82, 0.76, 0.7]) {
+        const compressed = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality))
+        if (compressed && compressed.size <= targetBytes) {
+          const filename = file.name.replace(/\.[^.]+$/, '') || 'schedule'
+          return new File([compressed], `${filename}.jpg`, { type: 'image/jpeg', lastModified: Date.now() })
+        }
+      }
+      scale *= 0.82
+    }
+  } finally {
+    bitmap.close?.()
+  }
+
+  throw new Error('This image is still too large after compression. Crop it to the schedule table and try again.')
+}
+
 const downloadSchedulePdf = (schedule, profile) => {
   const safeText = (value, maxLength = 28) => String(value || '')
     .normalize('NFKD')
@@ -1556,7 +1588,7 @@ function SubjectsPanel({ subjects, onAddSubject, onSave, onRemove, isSectionLock
     try {
       // Ipinapadala sa backend ang image para mabasa ng Gemini at ma-cross-check ng local OCR.
       const formData = new FormData()
-      formData.append('scheduleImage', file)
+      formData.append('scheduleImage', await optimizeScheduleImage(file))
       const response = await fetch('/api/ocr/upload', { method: 'POST', body: formData })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || `Image recognition failed (${response.status}).`)

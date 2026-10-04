@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { createHash, randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { MongoClient } from 'mongodb'
 import bcrypt from 'bcryptjs'
@@ -51,6 +52,58 @@ const getMongoSchedulesCollection = async () => {
   const collection = client.db(mongoDbName).collection('schedules')
   await collection.createIndex({ username: 1 }, { unique: true })
   return collection
+}
+
+const getMongoSessionsCollection = async () => {
+  if (!mongoUri) return null
+  if (!mongoClientPromise) {
+    const client = new MongoClient(mongoUri)
+    mongoClientPromise = client.connect()
+  }
+  const client = await mongoClientPromise
+  const collection = client.db(mongoDbName).collection('sessions')
+  await collection.createIndex({ tokenHash: 1 }, { unique: true })
+  await collection.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 })
+  return collection
+}
+
+const hashSessionToken = (token) => createHash('sha256').update(String(token || '')).digest('hex')
+
+export async function createSession(username, type, lifetime) {
+  const collection = await getMongoSessionsCollection()
+  if (!collection) throw new Error('MongoDB is required for sessions.')
+  const token = randomBytes(32).toString('hex')
+  // Hashed session records para gumana ang login kahit mag-iba ang Vercel function instance.
+  await collection.insertOne({
+    tokenHash: hashSessionToken(token),
+    username: normalizeUsername(username),
+    type,
+    createdAt: new Date(),
+    expiresAt: new Date(Date.now() + lifetime),
+  })
+  return token
+}
+
+export async function getSession(token, type) {
+  if (!/^[a-f0-9]{64}$/i.test(String(token || ''))) return null
+  const collection = await getMongoSessionsCollection()
+  if (!collection) return null
+  return collection.findOne({ tokenHash: hashSessionToken(token), type, expiresAt: { $gt: new Date() } })
+}
+
+export async function deleteSession(token) {
+  if (!/^[a-f0-9]{64}$/i.test(String(token || ''))) return false
+  const collection = await getMongoSessionsCollection()
+  if (!collection) return false
+  const result = await collection.deleteOne({ tokenHash: hashSessionToken(token) })
+  return result.deletedCount > 0
+}
+
+export async function deleteUserSessions(username) {
+  const collection = await getMongoSessionsCollection()
+  if (!collection) return 0
+  const result = await collection.deleteMany({ username: normalizeUsername(username), type: 'user' })
+  return result.deletedCount || 0
 }
 
 // Dito kinokopya ang schedule sa collection nito para madaling makita sa Compass.

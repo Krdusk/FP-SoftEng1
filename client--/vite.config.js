@@ -5,5 +5,6 @@ export default defineConfig(({ isSsrBuild }) => ({
   plugins: [react()],
   build: {
     copyPublicDir: !isSsrBuild,
+    emptyOutDir: true,
   },
 }))
