@@ -311,11 +311,39 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
           const localConfidence = recognitionConfidence
           const visionIsUseful = visionResult.rawText || visionResult.subject_code || visionResult.subject_name || visionResult.sections.length > 0
           if (visionIsUseful) {
-            const subjectCode = visionResult.subject_code || textParsed.subject_code || parsed.subject_code
-            const subjectName = visionResult.subject_name || textParsed.subject_name || parsed.subject_name
-            const visionWarnings = [...visionResult.warnings]
-            // AI transcription muna ang pinanggagalingan; local parser backup lang kung kulang ang AI structure.
             const sections = visionResult.sections.length ? visionResult.sections : textParsed.sections.length ? textParsed.sections : parsed.sections
+            const sectionKeys = new Set(sections.map((section) => compactValue(section.section_code)).filter(Boolean))
+            const subjectCodeCandidates = [visionResult.subject_code, textParsed.subject_code, parsed.subject_code].filter(Boolean)
+            const isSectionIdentifierValue = (candidate) => {
+              const target = compactValue(candidate)
+              if (!target) return false
+              const reachable = new Set([0])
+              for (let index = 0; index < target.length; index += 1) {
+                if (!reachable.has(index)) continue
+                for (const sectionKey of sectionKeys) {
+                  if (target.startsWith(sectionKey, index)) reachable.add(index + sectionKey.length)
+                }
+              }
+              return reachable.has(target.length)
+            }
+            const subjectCode = subjectCodeCandidates.find((candidate) => !isSectionIdentifierValue(candidate)) || ''
+            const aiNamePrefix = String(visionResult.subject_name || '').split(':', 1)[0]
+            const aiNameHasCourseCodePrefix = Boolean(textParsed.subject_code && compactValue(aiNamePrefix) === compactValue(textParsed.subject_code))
+            const subjectName = aiNameHasCourseCodePrefix ? textParsed.subject_name : visionResult.subject_name || textParsed.subject_name || parsed.subject_name
+            const evidenceFor = (value, preferredEvidence) => {
+              const evidence = String(preferredEvidence || '')
+              if (value && compactValue(evidence).includes(compactValue(value))) return evidence
+              const source = String(visionResult.rawText || '')
+              const index = source.toLocaleLowerCase().indexOf(String(value || '').toLocaleLowerCase())
+              return index >= 0 ? source.slice(index, index + String(value).length) : ''
+            }
+            const subjectCodeEvidence = evidenceFor(subjectCode, visionResult.subject_code_evidence)
+            const subjectNameEvidence = evidenceFor(subjectName, visionResult.subject_name_evidence)
+            const visionWarnings = [...visionResult.warnings].filter((warning) => !(subjectCode && /subject code/i.test(warning) && /section code|section identifier/i.test(warning)))
+            if (!subjectCode && subjectCodeCandidates.length) {
+              visionWarnings.push('The detected subject code matched a section identifier, so it was not used as the course code. Enter the course code in the review.')
+            }
+            // AI transcription muna ang pinanggagalingan; local parser backup lang kung kulang ang AI structure.
             if (visionResult.subject_code && parsed.subject_code && compactValue(visionResult.subject_code) !== compactValue(parsed.subject_code)) {
               visionWarnings.push(`AI vision and local OCR read different subject codes (“${visionResult.subject_code}” and “${parsed.subject_code}”). Compare the code to the image.`)
             }
@@ -336,7 +364,9 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
             parsed = {
               ...visionResult,
               subject_code: subjectCode,
+              subject_code_evidence: subjectCodeEvidence,
               subject_name: subjectName,
+              subject_name_evidence: subjectNameEvidence,
               sections,
               warnings: [...new Set(visionWarnings)],
             }

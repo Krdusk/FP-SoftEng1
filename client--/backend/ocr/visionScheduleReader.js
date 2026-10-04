@@ -162,7 +162,25 @@ const normalizeResult = (value) => {
     })
     return [{ section_code: sectionCode, section_code_evidence: String(section.section_code_evidence || '').trim(), available: true, meetings }]
   })
-  const subjectCode = verifyField(value.subject_code, value.subject_code_evidence, 'Subject code')
+  let subjectCode = verifyField(value.subject_code, value.subject_code_evidence, 'Subject code')
+  const identifierKey = (identifier) => normalizeComparable(identifier).replace(/\s+/g, '')
+  const isOnlySectionIdentifiers = (candidate) => {
+    const target = identifierKey(candidate)
+    if (!target) return false
+    const reachable = new Set([0])
+    for (let index = 0; index < target.length; index += 1) {
+      if (!reachable.has(index)) continue
+      for (const section of sections) {
+        const key = identifierKey(section.section_code)
+        if (key && target.startsWith(key, index)) reachable.add(index + key.length)
+      }
+    }
+    return reachable.has(target.length)
+  }
+  if (subjectCode && isOnlySectionIdentifiers(subjectCode)) {
+    subjectCode = ''
+    addWarning('The detected subject code matches a section code. Enter the course code in the review; section codes were kept separately.')
+  }
   const subjectName = verifyField(value.subject_name, value.subject_name_evidence, 'Subject name')
   return {
     rawText,
@@ -181,8 +199,8 @@ const visionResponseSchema = {
   properties: {
     rawText: { type: 'string', description: 'A faithful transcription of visible schedule labels, headings, and entries. Preserve layout order and line breaks.' },
     language: { type: 'string' },
-    subject_code: { type: 'string' },
-    subject_code_evidence: { type: 'string', description: 'An exact short quotation from rawText containing the subject code.' },
+    subject_code: { type: 'string', description: 'The code identifying the course or subject itself, never an identifier for one section.' },
+    subject_code_evidence: { type: 'string', description: 'An exact short quotation from rawText containing the course/subject code and enough context to distinguish it from a section code.' },
     subject_name: { type: 'string' },
     subject_name_evidence: { type: 'string', description: 'An exact short quotation from rawText containing the subject name.' },
     sections: {
@@ -190,8 +208,8 @@ const visionResponseSchema = {
       items: {
         type: 'object',
         properties: {
-          section_code: { type: 'string' },
-          section_code_evidence: { type: 'string', description: 'An exact short quotation from rawText containing this section identifier.' },
+          section_code: { type: 'string', description: 'The identifier for this specific section/offering, not the course code.' },
+          section_code_evidence: { type: 'string', description: 'An exact short quotation from rawText identifying this specific section/offering.' },
           meetings: {
             type: 'array',
             items: {
@@ -273,7 +291,9 @@ export async function readScheduleWithVision(imagePath, mimeType = '') {
 
 First transcribe all visible subject labels, section identifiers, weekday labels, dates, time ranges, and room/location text into rawText in the original language. Preserve spelling, punctuation, accents, and order. Keep distinct rows on distinct lines. Do not translate rawText or subject_name.
 
-Find the subject name and course/subject code from the title, labels, repeated row values, or the values associated with the section group. A subject code is institution-specific and can be any text token, letters, digits, punctuation, or a mixture; do not reject it for an unusual format. Distinguish the subject code from a section identifier by what it names and how it repeats or groups the entries, not by a fixed code pattern. Keep exact visible section identifiers even when they look like ordinary words or numbers. If a field cannot be distinguished from another value using visible context, leave it empty and explain the ambiguity.
+Identify the course/subject code and section code as different fields. The subject code identifies the course itself; a section code identifies one specific offering of that course. Use field labels, headings, grouping, and repetition to classify them. Never copy a section identifier into subject_code. Codes can have any format, so do not classify them by a pattern of letters or digits alone. Keep exact section identifiers even when they look like ordinary words or numbers. If the image does not clearly identify a separate course code, leave subject_code empty and add a warning instead of guessing from a section code.
+
+Find the subject name and code from the title, labels, repeated course values, or values shared across its section groups. Prefer an explicit Course/Subject Code label. When a row contains both a course code and section identifier, assign each only to its own field. If a field cannot be distinguished from another value using visible context, leave it empty and explain the ambiguity.
 
 Create one section for every visible section group that belongs to this subject. Capture every meeting slot for each section. Pair a day/date and time range to a section only when their visual group, row, or nearby text supports that pairing. A day can be written as a word, abbreviation, or a clear one-letter weekday marker. Resolve one-letter markers only if the rest of the schedule layout makes their meaning clear; a lone ambiguous T or S is not enough. Use the detected language to interpret weekday names. Return English weekday names.
 

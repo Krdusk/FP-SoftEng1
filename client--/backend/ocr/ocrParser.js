@@ -444,10 +444,16 @@ const extractSubject = (lines) => {
 
   for (const line of lines) {
     const starts = [...line.matchAll(/\b([A-Z][A-Z0-9_-]{2,})\s*:\s*/gi)]
-    if (starts.length < 2) continue
-    const last = starts[starts.length - 1]
-    const name = line.slice(last.index + last[0].length).replace(/\s*x\s*\.?\s*$/i, '').trim()
-    if (name) return { subject_code: last[1].toUpperCase(), subject_name: name }
+    if (!starts.length) continue
+    const selected = starts.length > 1 ? starts[starts.length - 1] : starts[0]
+    const code = selected[1].trim()
+    if (/^(?:SUBJECT|COURSE|SECTION|SEC|CLASS|ROOM|RM|LAB|DAY|DATE|TIME|INSTRUCTOR|TEACHER|PROFESSOR)$/i.test(code)) continue
+    const name = line.slice(selected.index + selected[0].length)
+      .split(/[|¦;]/, 1)[0]
+      .split(/\s+(?=(?:SUNDAY|MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY|SATURDAY|SUN|MON|TUE|WED|THU|FRI|SAT)\b)/i, 1)[0]
+      .replace(/\s*x\s*\.?\s*$/i, '')
+      .trim()
+    if (name && /[\p{L}]{3}/u.test(name)) return { subject_code: code.toUpperCase(), subject_name: name }
   }
 
   return { subject_code: '', subject_name: '' }
