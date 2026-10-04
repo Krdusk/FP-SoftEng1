@@ -271,25 +271,27 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
 
     console.log('OCR image received:', req.file.originalname)
 
-    // Kasabay ng local OCR ang Gemini para AI ang pangunahing reader at may backup pa rin.
+    const aiFirst = isVercel && Boolean(process.env.GEMINI_API_KEY)
     const visionPromise = process.env.GEMINI_API_KEY
       ? readScheduleWithVision(uploadedFilePath, req.file.mimetype).then((value) => ({ value })).catch((error) => ({ error }))
       : Promise.resolve(null)
 
     let recognition = { rawText: '', confidence: 0 }
     let localOcrError = null
-    try {
-      recognition = await recognizeImage(uploadedFilePath)
-    } catch (error) {
-      localOcrError = error
-      console.error('Local OCR error:', error)
+    if (!aiFirst) {
+      try {
+        recognition = await recognizeImage(uploadedFilePath)
+      } catch (error) {
+        localOcrError = error
+        console.error('Local OCR error:', error)
+      }
     }
     let rawText = String(recognition.rawText || '')
     let parsed = parseScheduleText(rawText)
     let recognitionConfidence = recognition.confidence
     let recognitionProvider = 'local OCR'
     let warnings = [...parsed.warnings]
-    const localRawText = rawText
+    let localRawText = rawText
     const compactValue = (value) => String(value || '').normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
     const compactRoom = (value) => compactValue(String(value || '').replace(/^(?:ROOM|RM)\s*[:#-]?\s*/i, ''))
     const localMeetings = (sections) => sections.flatMap((section) => (section.meetings || []).map((meeting) => [compactValue(section.section_code), meeting.day, meeting.meeting_date || '', meeting.time_start, meeting.time_end, compactRoom(meeting.room)].join('|'))).sort().join(';')
@@ -326,7 +328,7 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
             if (!subjectName) visionWarnings.push('Subject name was not confidently detected. Check the image and enter the name if needed.')
             if (!sections.length) visionWarnings.push('No section identifiers were confidently detected. Add a section manually if needed.')
             if (!sections.some((section) => section.meetings.length)) visionWarnings.push('No meeting times were confidently detected. Review the recognized text and add times manually if needed.')
-            if (!meetingsAgree) {
+            if (!aiFirst && !meetingsAgree) {
               visionWarnings.push('The image reader could not independently confirm every meeting detail. Compare the editable results with the original image before saving.')
             }
             rawText = visionResult.rawText || rawText
@@ -339,8 +341,8 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
             }
             warnings = [...parsed.warnings]
             const aiComplete = Boolean(subjectCode && subjectName && sections.length && sections.every((section) => section.section_code && section.meetings.length))
-            recognitionConfidence = meetingsAgree && aiComplete ? 96 : aiComplete ? 76 : visionHasMeetings ? 61 : localHasMeetings ? localConfidence : 40
-            recognitionProvider = `Gemini vision + local OCR (${vision.model})`
+            recognitionConfidence = meetingsAgree && aiComplete ? 96 : aiComplete ? aiFirst ? 88 : 76 : visionHasMeetings ? 61 : localHasMeetings ? localConfidence : 40
+            recognitionProvider = aiFirst ? `Gemini vision (${vision.model})` : `Gemini vision + local OCR (${vision.model})`
           }
         } else {
           warnings.unshift(rawText.trim()
@@ -351,9 +353,25 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
         }
       } catch (visionError) {
         console.error('AI vision fallback error:', visionError)
+        if (aiFirst) {
+          try {
+            recognition = await recognizeImage(uploadedFilePath)
+            rawText = String(recognition.rawText || '')
+            localRawText = rawText
+            parsed = parseScheduleText(rawText)
+            recognitionConfidence = recognition.confidence
+            recognitionProvider = 'Local OCR fallback'
+            warnings = [...parsed.warnings]
+          } catch (fallbackError) {
+            localOcrError = fallbackError
+            console.error('Local OCR fallback error:', fallbackError)
+          }
+        }
         warnings.unshift(rawText.trim()
-          ? `AI vision fallback failed: ${visionError.message}`
-          : `Local OCR found no text and AI vision failed: ${visionError.message}`)
+          ? `Gemini AI reading failed; showing ${recognitionProvider}: ${visionError.message}`
+          : localOcrError
+            ? `AI reading failed and local OCR could not read the image: ${localOcrError.message}`
+            : `Local OCR found no text and AI vision failed: ${visionError.message}`)
       }
     }
 
