@@ -182,9 +182,14 @@ const normalizeResult = (value) => {
     addWarning('The detected subject code matches a section code. Enter the course code in the review; section codes were kept separately.')
   }
   const subjectName = verifyField(value.subject_name, value.subject_name_evidence, 'Subject name')
+  const scheduleEvidence = String(value.schedule_evidence || '').trim()
+  const isSchedule = value.is_schedule === true && containsEvidence(rawText, scheduleEvidence)
+  if (value.is_schedule === true && !isSchedule) addWarning('The image could not be confirmed as a class schedule from its visible text.')
   return {
     rawText,
     language: String(value.language || '').trim().slice(0, 60),
+    is_schedule: isSchedule,
+    schedule_evidence: isSchedule ? scheduleEvidence : '',
     subject_code: subjectCode.replace(/\s+/g, ' ').slice(0, 60),
     subject_code_evidence: String(value.subject_code_evidence || '').trim(),
     subject_name: subjectName.slice(0, 120),
@@ -199,6 +204,8 @@ const visionResponseSchema = {
   properties: {
     rawText: { type: 'string', description: 'A faithful transcription of visible schedule labels, headings, and entries. Preserve layout order and line breaks.' },
     language: { type: 'string' },
+    is_schedule: { type: 'boolean', description: 'True only when the image visibly contains an academic class timetable with course/section information and meeting day/time entries. False for unrelated images, documents, or non-class schedules.' },
+    schedule_evidence: { type: 'string', description: 'When is_schedule is true, quote a short exact passage from rawText that shows class/section context and a meeting day plus time. Empty when false.' },
     subject_code: { type: 'string', description: 'The code identifying the course or subject itself, never an identifier for one section.' },
     subject_code_evidence: { type: 'string', description: 'An exact short quotation from rawText containing the course/subject code and enough context to distinguish it from a section code.' },
     subject_name: { type: 'string' },
@@ -235,7 +242,7 @@ const visionResponseSchema = {
     },
     warnings: { type: 'array', items: { type: 'string' } },
   },
-  required: ['rawText', 'language', 'subject_code', 'subject_code_evidence', 'subject_name', 'subject_name_evidence', 'sections', 'warnings'],
+  required: ['rawText', 'language', 'is_schedule', 'schedule_evidence', 'subject_code', 'subject_code_evidence', 'subject_name', 'subject_name_evidence', 'sections', 'warnings'],
 }
 
 export async function readScheduleWithVision(imagePath, mimeType = '') {
@@ -287,7 +294,9 @@ export async function readScheduleWithVision(imagePath, mimeType = '') {
             ...(isGemini3Model ? { media_resolution: { level: 'MEDIA_RESOLUTION_HIGH' } } : {}),
           },
           {
-            text: `Read this academic schedule image as a careful data-entry task. The image may have no column headings, may be a timetable/grid, a list, a screenshot with merged cells, or a mixture of labels and values. Do not assume fixed columns or a standard layout. Inspect the whole image and use visual grouping, alignment, row order, spacing, repeated values, and nearby text together to decide which subject, section, day, and time belong together.
+            text: `First decide whether this image actually contains an academic class schedule. A valid schedule shows class/subject or section information and meeting days with times. Set is_schedule=false for unrelated photos, forms, receipts, menus, ordinary calendars, or work schedules. When false, leave schedule fields empty. When true, schedule_evidence must be an exact short quote from rawText showing class/section context and a meeting day plus time. Do not call something a class schedule only because it contains numbers or times.
+
+Read this academic schedule image as a careful data-entry task. The image may have no column headings, may be a timetable/grid, a list, a screenshot with merged cells, or a mixture of labels and values. Do not assume fixed columns or a standard layout. Inspect the whole image and use visual grouping, alignment, row order, spacing, repeated values, and nearby text together to decide which subject, section, day, and time belong together.
 
 First transcribe all visible subject labels, section identifiers, weekday labels, dates, time ranges, and room/location text into rawText in the original language. Preserve spelling, punctuation, accents, and order. Keep distinct rows on distinct lines. Do not translate rawText or subject_name.
 

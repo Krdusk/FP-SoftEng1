@@ -259,6 +259,8 @@ app.post('/api/schedules/plan', (req, res) => {
 app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
   let uploadedFilePath = null
   const requestStartedAt = Date.now()
+  let aiScheduleClassification = null
+  let aiScheduleEvidenceVerified = false
 
   try {
     if (!req.file) {
@@ -304,6 +306,8 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
         const vision = outcome.value
         if (vision.configured) {
           const visionResult = vision.result
+          aiScheduleClassification = visionResult.is_schedule
+          aiScheduleEvidenceVerified = Boolean(visionResult.is_schedule && visionResult.schedule_evidence && String(visionResult.rawText || '').includes(visionResult.schedule_evidence))
           const textParsed = parseScheduleText(visionResult.rawText)
           const visionHasMeetings = visionResult.sections.some((section) => section.meetings.length)
           const localHasMeetings = parsed.sections.some((section) => section.meetings.length)
@@ -404,6 +408,17 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
             ? `AI reading failed and local OCR could not read the image: ${localOcrError.message}`
             : `Local OCR found no text and AI vision failed: ${visionError.message}`)
       }
+    }
+
+    const hasSectionMeeting = parsed.sections.some((section) => section.section_code && section.meetings.length)
+    const hasClassContext = /\b(?:class|course|subject|section|timetable|schedule|lecture|laboratory|lab)\b/i.test(rawText)
+    const localScheduleShape = hasSectionMeeting && (parsed.subject_code || parsed.subject_name || hasClassContext)
+    const aiScheduleShape = aiScheduleClassification === true && aiScheduleEvidenceVerified && hasSectionMeeting
+    if (!aiScheduleShape && !localScheduleShape) {
+      return res.status(422).json({
+        ok: false,
+        error: 'This image does not appear to contain a class schedule. Please upload a timetable showing subject or section details with meeting days and times.',
+      })
     }
 
     if (recognitionConfidence < 60) warnings.unshift('Recognition confidence is low. Review every code, date, day, and time against the image.')
