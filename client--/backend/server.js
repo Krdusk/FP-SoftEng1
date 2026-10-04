@@ -276,9 +276,6 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
     const visionPromise = process.env.GEMINI_API_KEY
       ? readScheduleWithVision(uploadedFilePath, req.file.mimetype).then((value) => ({ value })).catch((error) => ({ error }))
       : Promise.resolve(null)
-    const localOcrPromise = aiFirst
-      ? recognizeImage(uploadedFilePath, { fast: true }).then((value) => ({ value })).catch((error) => ({ error }))
-      : null
 
     let recognition = { rawText: '', confidence: 0 }
     let localOcrError = null
@@ -307,17 +304,6 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
         const vision = outcome.value
         if (vision.configured) {
           const visionResult = vision.result
-          if (localOcrPromise) {
-            const localOutcome = await localOcrPromise
-            if (localOutcome.error) {
-              localOcrError = localOutcome.error
-              console.error('Local OCR cross-check error:', localOutcome.error)
-            } else {
-              recognition = localOutcome.value
-              localRawText = String(recognition.rawText || '')
-              parsed = parseScheduleText(localRawText)
-            }
-          }
           const textParsed = parseScheduleText(visionResult.rawText)
           const visionHasMeetings = visionResult.sections.some((section) => section.meetings.length)
           const localHasMeetings = parsed.sections.some((section) => section.meetings.length)
@@ -371,8 +357,8 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
             if (!subjectName) visionWarnings.push('Subject name was not confidently detected. Check the image and enter the name if needed.')
             if (!sections.length) visionWarnings.push('No section identifiers were confidently detected. Add a section manually if needed.')
             if (!sections.some((section) => section.meetings.length)) visionWarnings.push('No meeting times were confidently detected. Review the recognized text and add times manually if needed.')
-            if (!meetingsAgree) {
-              visionWarnings.push('AI vision and local OCR did not independently confirm all meeting details. Compare every day, time, and room with the original image before saving.')
+            if (!aiFirst && !meetingsAgree) {
+              visionWarnings.push('The image reader could not independently confirm every meeting detail. Compare the editable results with the original image before saving.')
             }
             rawText = visionResult.rawText || rawText
             parsed = {
@@ -386,10 +372,7 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
             }
             warnings = [...parsed.warnings]
             const aiComplete = Boolean(subjectCode && subjectName && sections.length && sections.every((section) => section.section_code && section.meetings.length))
-            const subjectCodesAgree = !visionResult.subject_code || !parsed.subject_code || compactValue(visionResult.subject_code) === compactValue(parsed.subject_code)
-            const subjectNamesAgree = !visionResult.subject_name || !parsed.subject_name || compactValue(visionResult.subject_name) === compactValue(parsed.subject_name)
-            const sourcesAgree = meetingsAgree && subjectCodesAgree && subjectNamesAgree
-            recognitionConfidence = sourcesAgree && aiComplete ? 96 : visionHasMeetings && localHasMeetings ? 55 : aiComplete ? aiFirst ? 82 : 76 : visionHasMeetings ? 61 : localHasMeetings ? localConfidence : 40
+            recognitionConfidence = meetingsAgree && aiComplete ? 96 : aiComplete ? aiFirst ? 88 : 76 : visionHasMeetings ? 61 : localHasMeetings ? localConfidence : 40
             recognitionProvider = aiFirst ? `Gemini vision (${vision.model})` : `Gemini vision + local OCR (${vision.model})`
           }
         } else {
@@ -403,9 +386,7 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
         console.error('AI vision fallback error:', visionError)
         if (aiFirst) {
           try {
-            const localOutcome = localOcrPromise ? await localOcrPromise : { value: await recognizeImage(uploadedFilePath, { fast: true }) }
-            if (localOutcome.error) throw localOutcome.error
-            recognition = localOutcome.value
+            recognition = await recognizeImage(uploadedFilePath, { fast: true })
             rawText = String(recognition.rawText || '')
             localRawText = rawText
             parsed = parseScheduleText(rawText)
