@@ -231,7 +231,7 @@ export async function readScheduleWithVision(imagePath, mimeType = '') {
     image = await sharp(imagePath, { failOn: 'none' })
       .rotate()
       .flatten({ background: '#ffffff' })
-      .resize({ width: 3200, height: 3200, fit: 'inside', withoutEnlargement: true })
+      .resize({ width: 3000, height: 3000, fit: 'inside', withoutEnlargement: true })
       .jpeg({ quality: 92, mozjpeg: true })
       .toBuffer()
     imageMime = 'image/jpeg'
@@ -243,7 +243,7 @@ export async function readScheduleWithVision(imagePath, mimeType = '') {
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(imageMime)) {
     throw new Error('AI vision supports JPG, PNG, or WebP images. Save the schedule in one of those formats and upload it again.')
   }
-  const imageUrl = `data:${imageMime};base64,${image.toString('base64')}`
+  const imageData = image.toString('base64')
   // Gemini ang tumitingin sa buong layout; naka-JSON schema para ma-check ang mga field.
   let response
   try {
@@ -257,7 +257,7 @@ export async function readScheduleWithVision(imagePath, mimeType = '') {
       body: JSON.stringify({
       contents: [{
         parts: [
-          { inline_data: { mime_type: imageMime, data: image.toString('base64') } },
+          { inline_data: { mime_type: imageMime, data: imageData } },
           {
             text: `Read this academic schedule image as a careful data-entry task. The image may have no column headings, may be a timetable/grid, a list, a screenshot with merged cells, or a mixture of labels and values. Do not assume fixed columns or a standard layout. Inspect the whole image and use visual grouping, alignment, row order, spacing, repeated values, and nearby text together to decide which subject, section, day, and time belong together.
 

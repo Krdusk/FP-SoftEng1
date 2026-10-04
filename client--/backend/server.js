@@ -271,7 +271,7 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
 
     console.log('OCR image received:', req.file.originalname)
 
-    const aiFirst = isVercel && Boolean(process.env.GEMINI_API_KEY)
+    const aiFirst = Boolean(process.env.GEMINI_API_KEY)
     const visionPromise = process.env.GEMINI_API_KEY
       ? readScheduleWithVision(uploadedFilePath, req.file.mimetype).then((value) => ({ value })).catch((error) => ({ error }))
       : Promise.resolve(null)
