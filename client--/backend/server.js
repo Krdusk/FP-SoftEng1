@@ -259,7 +259,6 @@ app.post('/api/schedules/plan', (req, res) => {
 app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
   let uploadedFilePath = null
   const requestStartedAt = Date.now()
-  let aiScheduleClassification = null
 
   try {
     if (!req.file) {
@@ -305,7 +304,6 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
         const vision = outcome.value
         if (vision.configured) {
           const visionResult = vision.result
-          aiScheduleClassification = visionResult.is_schedule
           const textParsed = parseScheduleText(visionResult.rawText)
           const visionHasMeetings = visionResult.sections.some((section) => section.meetings.length)
           const localHasMeetings = parsed.sections.some((section) => section.meetings.length)
@@ -406,21 +404,6 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
             ? `AI reading failed and local OCR could not read the image: ${localOcrError.message}`
             : `Local OCR found no text and AI vision failed: ${visionError.message}`)
       }
-    }
-
-    const hasSectionMeeting = parsed.sections.some((section) => section.section_code && section.meetings.some((meeting) => meeting.day && meeting.time_start && meeting.time_end))
-    const hasClassContext = /\b(?:class|course|subject|section|timetable|schedule|lecture|laboratory|lab)\b/i.test(rawText)
-    const hasDayAndTimeText = /\b(?:SUN(?:DAY)?|MON(?:DAY)?|TUE(?:S?DAY)?|WED(?:NESDAY)?|THU(?:RSDAY)?|FRI(?:DAY)?|SAT(?:URDAY)?)\b/i.test(rawText)
-      && /\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?\s*(?:-|–|—|to|until|through)\s*\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?\b/i.test(rawText)
-    const hasCourseOrSection = Boolean(parsed.subject_code || parsed.subject_name || parsed.sections.some((section) => section.section_code))
-    const hasScheduleClues = hasSectionMeeting || (hasDayAndTimeText && (hasClassContext || hasCourseOrSection))
-    const clearlyNotSchedule = aiScheduleClassification === false && !hasScheduleClues
-    const hasNoScheduleEvidence = aiScheduleClassification === null && !hasScheduleClues
-    if (clearlyNotSchedule || hasNoScheduleEvidence) {
-      return res.status(422).json({
-        ok: false,
-        error: 'This image does not appear to contain a class schedule. Please upload a timetable showing subject or section details with meeting days and times.',
-      })
     }
 
     if (recognitionConfidence < 60) warnings.unshift('Recognition confidence is low. Review every code, date, day, and time against the image.')
