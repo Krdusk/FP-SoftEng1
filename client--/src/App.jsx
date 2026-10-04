@@ -42,14 +42,24 @@ const toMinutes = (value) => {
 }
 
 const optimizeScheduleImage = async (file) => {
-  const targetBytes = 3_200_000
-  if (file.size <= targetBytes) return file
-  if (typeof createImageBitmap !== 'function') throw new Error('This image is larger than the online upload limit. Crop or resize it, then try again.')
+  const targetBytes = 2_400_000
+  if (file.size <= 900_000 && file.type === 'image/jpeg') return file
+  if (typeof createImageBitmap !== 'function') {
+    if (file.size <= 3_200_000) return file
+    throw new Error('This image is larger than the online upload limit. Crop or resize it, then try again.')
+  }
 
-  const bitmap = await createImageBitmap(file)
+  let bitmap
+  try {
+    bitmap = await createImageBitmap(file)
+  } catch {
+    if (file.size <= 3_800_000) return file
+    throw new Error('This image could not be prepared for upload. Crop it to the schedule or save it as JPG or PNG, then try again.')
+  }
   try {
     let scale = Math.min(1, 2600 / Math.max(bitmap.width, bitmap.height))
-    for (let resizeAttempt = 0; resizeAttempt < 6; resizeAttempt += 1) {
+    let bestCompressed = null
+    for (let resizeAttempt = 0; resizeAttempt < 3; resizeAttempt += 1) {
       const canvas = document.createElement('canvas')
       canvas.width = Math.max(1, Math.round(bitmap.width * scale))
       canvas.height = Math.max(1, Math.round(bitmap.height * scale))
@@ -57,15 +67,19 @@ const optimizeScheduleImage = async (file) => {
       if (!context) throw new Error('This browser could not prepare the schedule image for upload.')
       context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
 
-      for (const quality of [0.88, 0.82, 0.76, 0.7]) {
+      for (const quality of [0.92, 0.88, 0.84, 0.8]) {
         const compressed = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality))
-        if (compressed && compressed.size <= targetBytes) {
-          const filename = file.name.replace(/\.[^.]+$/, '') || 'schedule'
-          return new File([compressed], `${filename}.jpg`, { type: 'image/jpeg', lastModified: Date.now() })
-        }
+        if (compressed && (!bestCompressed || compressed.size < bestCompressed.size)) bestCompressed = compressed
+        if (compressed && compressed.size <= targetBytes) break
       }
-      scale *= 0.82
+      if (bestCompressed && bestCompressed.size <= targetBytes) break
+      scale *= 0.9
     }
+    if (bestCompressed && bestCompressed.size < file.size) {
+      const filename = file.name.replace(/\.[^.]+$/, '') || 'schedule'
+      return new File([bestCompressed], `${filename}.jpg`, { type: 'image/jpeg', lastModified: Date.now() })
+    }
+    if (file.size <= 3_800_000) return file
   } finally {
     bitmap.close?.()
   }
@@ -1552,12 +1566,14 @@ function SubjectsPanel({ subjects, onAddSubject, onSave, onRemove, isSectionLock
       if (current) URL.revokeObjectURL(current)
       return previewUrl
     })
-    setImportMessage('Recognizing text in the image…')
+    setImportMessage('Preparing your image for upload…')
     setIsImporting(true)
     try {
       // Ipinapadala sa backend ang image para mabasa ng Gemini at ma-cross-check ng local OCR.
       const formData = new FormData()
-      formData.append('scheduleImage', await optimizeScheduleImage(file))
+      const optimizedImage = await optimizeScheduleImage(file)
+      setImportMessage('Uploading image for AI reading…')
+      formData.append('scheduleImage', optimizedImage)
       const response = await fetch('/api/ocr/upload', { method: 'POST', body: formData })
       const responseText = await response.text()
       let result

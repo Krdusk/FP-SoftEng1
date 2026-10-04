@@ -258,6 +258,7 @@ app.post('/api/schedules/plan', (req, res) => {
 
 app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
   let uploadedFilePath = null
+  const requestStartedAt = Date.now()
 
   try {
     if (!req.file) {
@@ -355,7 +356,7 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
         console.error('AI vision fallback error:', visionError)
         if (aiFirst) {
           try {
-            recognition = await recognizeImage(uploadedFilePath)
+            recognition = await recognizeImage(uploadedFilePath, { fast: true })
             rawText = String(recognition.rawText || '')
             localRawText = rawText
             parsed = parseScheduleText(rawText)
@@ -377,6 +378,7 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
 
     if (recognitionConfidence < 60) warnings.unshift('Recognition confidence is low. Review every code, date, day, and time against the image.')
 
+    console.info(`Schedule image request completed in ${Date.now() - requestStartedAt} ms via ${recognitionProvider}.`)
     res.json({
       ok: true,
       originalFileName: req.file.originalname,

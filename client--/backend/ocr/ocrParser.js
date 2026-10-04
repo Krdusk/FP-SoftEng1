@@ -21,13 +21,15 @@ const getWorker = async () => {
   return workerPromise
 }
 
-const prepareImages = async (imagePath) => {
+const prepareImages = async (imagePath, fast = false) => {
   // Gumagawa ng ilang malinaw na crop at contrast variant para may maikumpara ang local OCR.
   const source = sharp(imagePath, { failOn: 'none' }).rotate().flatten({ background: '#ffffff' })
   const metadata = await source.metadata()
   if (!metadata.width || !metadata.height) throw new Error('The uploaded image could not be read.')
 
-  const width = Math.min(3600, Math.max(2000, metadata.width * 2.5))
+  const width = fast
+    ? Math.min(2600, Math.max(1800, metadata.width))
+    : Math.min(3600, Math.max(2000, metadata.width * 2.5))
   const normalized = await source
     .resize({ width, withoutEnlargement: false })
     .grayscale()
@@ -35,6 +37,20 @@ const prepareImages = async (imagePath) => {
     .sharpen()
     .png()
     .toBuffer()
+  if (fast) {
+    const color = await sharp(imagePath, { failOn: 'none' })
+      .rotate()
+      .flatten({ background: '#ffffff' })
+      .resize({ width, withoutEnlargement: false })
+      .sharpen()
+      .png()
+      .toBuffer()
+    return [
+      { image: normalized, mode: '3' },
+      { image: normalized, mode: '6' },
+      { image: color, mode: '6' },
+    ]
+  }
   const imageInfo = await sharp(normalized).metadata()
   const unnormalized = await sharp(imagePath, { failOn: 'none' })
     .rotate()
@@ -110,9 +126,9 @@ const getLayoutText = (blocks) => {
   return lines.sort((first, second) => first.y - second.y || first.x - second.x).map((line) => line.text).join('\n')
 }
 
-const recognizeImageInternal = async (imagePath) => {
+const recognizeImageInternal = async (imagePath, { fast = false } = {}) => {
   const worker = await getWorker()
-  const images = await prepareImages(imagePath)
+  const images = await prepareImages(imagePath, fast)
   const candidates = []
   const passSummary = []
 
@@ -141,9 +157,9 @@ const recognizeImageInternal = async (imagePath) => {
   return { rawText: candidates[0].text, confidence: candidates[0].confidence, passSummary }
 }
 
-export function recognizeImage(imagePath) {
+export function recognizeImage(imagePath, options = {}) {
   // Sunod-sunod ang OCR jobs para hindi mag-agawan sa iisang Tesseract worker.
-  const result = recognitionQueue.then(() => recognizeImageInternal(imagePath))
+  const result = recognitionQueue.then(() => recognizeImageInternal(imagePath, options))
   recognitionQueue = result.catch(() => undefined)
   return result
 }

@@ -225,14 +225,16 @@ export async function readScheduleWithVision(imagePath, mimeType = '') {
   if (!apiKey) return { configured: false }
 
   const model = process.env.GEMINI_VISION_MODEL || 'gemini-3.5-flash-lite'
+  const isGemini3Model = /^gemini-3(?:[.-]|$)/i.test(model)
+  const imagePreparationStartedAt = Date.now()
   let image
   let imageMime = mimeType
   try {
     image = await sharp(imagePath, { failOn: 'none' })
       .rotate()
       .flatten({ background: '#ffffff' })
-      .resize({ width: 3000, height: 3000, fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 92, mozjpeg: true })
+      .resize({ width: 2600, height: 2600, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 90, mozjpeg: true })
       .toBuffer()
     imageMime = 'image/jpeg'
   } catch {
@@ -244,8 +246,10 @@ export async function readScheduleWithVision(imagePath, mimeType = '') {
     throw new Error('AI vision supports JPG, PNG, or WebP images. Save the schedule in one of those formats and upload it again.')
   }
   const imageData = image.toString('base64')
+  console.info(`Schedule image prepared for Gemini in ${Date.now() - imagePreparationStartedAt} ms (${Math.round(image.length / 1024)} KB).`)
   // Gemini ang tumitingin sa buong layout; naka-JSON schema para ma-check ang mga field.
   let response
+  const geminiStartedAt = Date.now()
   try {
     response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
       method: 'POST',
@@ -253,11 +257,17 @@ export async function readScheduleWithVision(imagePath, mimeType = '') {
         'x-goog-api-key': apiKey,
         'Content-Type': 'application/json',
       },
-      signal: AbortSignal.timeout(90000),
+      signal: AbortSignal.timeout(45000),
       body: JSON.stringify({
       contents: [{
         parts: [
-          { inline_data: { mime_type: imageMime, data: imageData } },
+          {
+            inline_data: {
+              mime_type: imageMime,
+              data: imageData,
+            },
+            ...(isGemini3Model ? { media_resolution: { level: 'MEDIA_RESOLUTION_HIGH' } } : {}),
+          },
           {
             text: `Read this academic schedule image as a careful data-entry task. The image may have no column headings, may be a timetable/grid, a list, a screenshot with merged cells, or a mixture of labels and values. Do not assume fixed columns or a standard layout. Inspect the whole image and use visual grouping, alignment, row order, spacing, repeated values, and nearby text together to decide which subject, section, day, and time belong together.
 
@@ -277,10 +287,17 @@ Return every field in the required JSON schema. Use empty strings/arrays when so
           },
         ],
       }],
-      generationConfig: { responseMimeType: 'application/json', responseSchema: visionResponseSchema, temperature: 0, maxOutputTokens: 9000 },
+      generationConfig: {
+        responseMimeType: 'application/json',
+        responseSchema: visionResponseSchema,
+        maxOutputTokens: 9000,
+        ...(isGemini3Model ? { thinkingConfig: { thinkingLevel: 'minimal' } } : {}),
+      },
       }),
     })
+    console.info(`Gemini schedule reading responded in ${Date.now() - geminiStartedAt} ms (HTTP ${response.status}).`)
   } catch (error) {
+    console.warn(`Gemini schedule reading failed after ${Date.now() - geminiStartedAt} ms.`)
     if (error.name === 'TimeoutError' || error.name === 'AbortError') {
       throw new Error('Gemini AI timed out while reading this image. Try a smaller or clearer screenshot.')
     }
