@@ -1,12 +1,12 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "index.js": {
+    "api/index.js": {
       "includeFiles": "{dist/**,backend/admin/**,eng.traineddata}",
       "maxDuration": 60
     }
   },
   "rewrites": [
-    { "source": "/admin", "destination": "/admin/index.html" }
+    { "source": "/(.*)", "destination": "/api/index.js" }
   ]
 }

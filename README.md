@@ -88,7 +88,7 @@ Requirements: Node.js `20.19+` or `22.12+`, npm, and a running MongoDB server.
 Deploy the app to **Vercel** as a Node.js function. The Express server provides the API, authentication, image reader, and admin dashboard.
 
 1. Import the GitHub repository into Vercel and set **Root Directory** to `client--`.
-2. Set **Install Command** to `npm ci` and **Build Command** to `npm run build:vercel`. The Vercel config and `index.js` entry point are in `client--/`.
+2. Set **Install Command** to `npm ci` and **Build Command** to `npm run build:vercel`. The Vercel config and API entry point are in `client--/`.
 3. In Vercel's **Environment Variables**, add:
 
    ```text
