@@ -21,16 +21,13 @@ const emptyProfile = {
   profile_year: 'First year',
   notify_email: true,
   notify_push: true,
-  theme_pref: 'light',
+  theme_pref: 'dark',
 }
 
 const emptyConstraints = {
-  constraint_start: '07:00',
-  constraint_end: '21:00',
-  preferred_days: [],
   break_pref: 'Compact',
-  max_consecutive: 4,
   minimize_school_days: false,
+  study_shift: 'morning-afternoon',
 }
 
 const fmtTime = (value) => {
@@ -45,7 +42,143 @@ const toMinutes = (value) => {
   return hours * 60 + minutes
 }
 
+const downloadSchedulePdf = (schedule, profile) => {
+  const safeText = (value, maxLength = 28) => String(value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[–—]/g, '-')
+    .replace(/·/g, '-')
+    .replace(/[^\x20-\x7E]/g, '')
+    .slice(0, maxLength)
+    .replace(/[\\()]/g, '\\$&')
+  const entries = schedule
+    .filter((entry) => DAYS.includes(entry.day) && /^\d{2}:\d{2}$/.test(entry.time_start || '') && /^\d{2}:\d{2}$/.test(entry.time_end || ''))
+    .map((entry) => ({ ...entry, start: toMinutes(entry.time_start), end: toMinutes(entry.time_end) }))
+  if (!entries.length) return
+
+  const pageWidth = 842
+  const pageHeight = 595
+  const left = 28
+  const tableWidth = pageWidth - left * 2
+  const timeWidth = 62
+  const dayWidth = (tableWidth - timeWidth) / DAYS.length
+  const tableTop = 506
+  const headerHeight = 24
+  const bottom = 28
+  const firstSlot = Math.floor(Math.min(...entries.map((entry) => entry.start)) / 30) * 30
+  const lastSlot = Math.ceil(Math.max(...entries.map((entry) => entry.end)) / 30) * 30
+  const rowCount = Math.max(1, (lastSlot - firstSlot) / 30)
+  const rowHeight = Math.min(30, (tableTop - headerHeight - bottom) / rowCount)
+  const commands = []
+  const addText = (text, x, y, size, bold = false, color = '0.12 0.16 0.22') => {
+    commands.push(`${color} rg BT /${bold ? 'F2' : 'F1'} ${size} Tf ${x.toFixed(2)} ${y.toFixed(2)} Td (${safeText(text, 120)}) Tj ET`)
+  }
+  const addCell = (x, y, width, height, fill = '1 1 1') => {
+    commands.push(`${fill} rg ${x.toFixed(2)} ${y.toFixed(2)} ${width.toFixed(2)} ${height.toFixed(2)} re f`)
+    commands.push('0.67 0.71 0.77 RG 0.55 w')
+    commands.push(`${x.toFixed(2)} ${y.toFixed(2)} ${width.toFixed(2)} ${height.toFixed(2)} re S`)
+  }
+
+  addText('MyTerm', left, 558, 20, true, '0.08 0.16 0.28')
+  addText('May the Schedule, be with you.', left, 544, 8, false, '0.34 0.39 0.46')
+  addText('WEEKLY CLASS SCHEDULE', 570, 558, 14, true, '0.08 0.16 0.28')
+  if (profile.profile_name) addText(profile.profile_name, 570, 543, 9, false, '0.28 0.33 0.40')
+
+  let y = tableTop - headerHeight
+  addCell(left, y, timeWidth, headerHeight, '0.89 0.92 0.96')
+  addText('TIME', left + 7, y + 8, 8, true, '0.10 0.16 0.25')
+  DAYS.forEach((day, index) => {
+    const x = left + timeWidth + index * dayWidth
+    addCell(x, y, dayWidth, headerHeight, '0.89 0.92 0.96')
+    addText(day, x + 5, y + 8, 8, true, '0.10 0.16 0.25')
+  })
+
+  for (let row = 0; row < rowCount; row += 1) {
+    const slot = firstSlot + row * 30
+    y = tableTop - headerHeight - (row + 1) * rowHeight
+    const hours = Math.floor(slot / 60)
+    const minutes = slot % 60
+    addCell(left, y, timeWidth, rowHeight, '0.95 0.96 0.97')
+    addText(fmtTime(`${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`), left + 5, y + rowHeight / 2 - 2, 7, false, '0.25 0.30 0.38')
+    DAYS.forEach((day, index) => {
+      const x = left + timeWidth + index * dayWidth
+      addCell(x, y, dayWidth, rowHeight)
+      entries.filter((entry) => entry.day === day && Math.floor(entry.start / 30) * 30 === slot).forEach((entry) => {
+        const cardX = x + 2
+        const cardY = y + 1
+        const cardWidth = dayWidth - 4
+        const cardHeight = Math.max(1, rowHeight - 2)
+        commands.push(`0.96 0.94 0.88 rg ${cardX.toFixed(2)} ${cardY.toFixed(2)} ${cardWidth.toFixed(2)} ${cardHeight.toFixed(2)} re f`)
+        commands.push(`0.72 0.55 0.18 RG 1.6 w ${cardX.toFixed(2)} ${cardY.toFixed(2)} m ${cardX.toFixed(2)} ${(cardY + cardHeight).toFixed(2)} l S`)
+        const name = entry.subject_code || entry.subject_name || 'Class'
+        addText(`${name} ${entry.section_code || ''}`, cardX + 4, y + rowHeight - 8, 6.5, true)
+        const room = entry.room ? ` - ${entry.room}` : ''
+        addText(`${fmtTime(entry.time_start)}-${fmtTime(entry.time_end)}${room}`, cardX + 4, y + 4, 5.7)
+      })
+    })
+  }
+
+  const stream = commands.join('\n')
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>',
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+  ]
+  let pdf = '%PDF-1.4\n'
+  const offsets = [0]
+  objects.forEach((object, index) => {
+    offsets.push(pdf.length)
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`
+  })
+  const xrefOffset = pdf.length
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`
+  offsets.slice(1).forEach((offset) => { pdf += `${String(offset).padStart(10, '0')} 00000 n \n` })
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`
+  const url = URL.createObjectURL(new Blob([pdf], { type: 'application/pdf' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'MyTerm-Weekly-Schedule.pdf'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+const startOfWeek = (value) => {
+  const date = new Date(value)
+  date.setHours(0, 0, 0, 0)
+  date.setDate(date.getDate() - date.getDay())
+  return date
+}
+
+const dateKey = (value) => {
+  const date = new Date(value)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const availableSections = (subject) => (subject.sections || []).filter((section) =>
+  section.available !== false && section.unavailable !== true && getMeetingSlots(section).length > 0,
+)
+
+const dayFromDate = (value) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return null
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(year, month - 1, day, 12)
+  return DAYS[date.getDay()]
+}
+
+const calendarEntriesFor = (subject, selectedIds) => availableSections(subject)
+  .filter((section) => selectedIds.includes(section.id))
+  .flatMap((section) => toScheduleEntries(subject, section))
+
 const overlaps = (a, b) =>
+  (!a.meeting_date || !b.meeting_date || a.meeting_date === b.meeting_date) &&
   a.day === b.day &&
   toMinutes(a.time_start) < toMinutes(b.time_end) &&
   toMinutes(a.time_end) > toMinutes(b.time_start)
@@ -68,35 +201,95 @@ const toScheduleEntries = (subject, section) => getMeetingSlots(section).map((me
   subject_name: subject.subject_name,
   subject_code: subject.subject_code,
   section_code: section.section_code,
-  day: meeting.day,
+  day: dayFromDate(meeting.meeting_date) || meeting.day,
   time_start: meeting.time_start,
   time_end: meeting.time_end,
+  ...(meeting.meeting_date ? { meeting_date: meeting.meeting_date } : {}),
   room: meeting.room || '',
   instructor: meeting.instructor || '',
 }))
 
 const getSelectedSectionId = (subject, lockedSections = []) => {
   if (Object.prototype.hasOwnProperty.call(subject, 'selectedSectionId')) return subject.selectedSectionId
-  const sections = Array.isArray(subject.sections) ? subject.sections : []
   const locked = lockedSections.find((section) => section.subject_id === subject.id)
-  return locked?.id || (sections.find((section) => section.available !== false && section.unavailable !== true) || sections[0])?.id || null
+  return locked?.id || null
 }
 
-function Icon({ name, size = 18 }) {
+const restoreCalendarSelections = (subjects) => subjects.map((subject) => ({
+  ...subject,
+  calendarSectionIds: Array.isArray(subject.calendarSectionIds)
+    ? subject.calendarSectionIds.filter((id) => availableSections(subject).some((section) => section.id === id))
+    : availableSections(subject).map((section) => section.id),
+}))
+
+function Icon({ name, size = 18, className }) {
   const Component = Icons[name] || Icons.CalendarDays
-  return <Component size={size} />
+  return <Component size={size} className={className} />
+}
+
+function ActivityIndicator({ label }) {
+  return <span className="activity-indicator" role="status"><span className="activity-orbit" aria-hidden="true"><i /></span><span>{label}</span><span className="activity-track" aria-hidden="true"><i /></span></span>
+}
+
+const trailerScenes = [
+  { kicker: 'A NEW TERM BEGINS', title: 'Your week is wide open.', copy: 'Seven days. Dozens of class sections. One schedule that needs to fit your life.' },
+  { kicker: 'BRING IT ALL TOGETHER', title: 'Every subject. Every meeting.', copy: 'Add the available sections, days, times, and rooms you are considering.' },
+  { kicker: 'FIND YOUR ALIGNMENT', title: 'Make room for what matters.', copy: 'MyTerm compares combinations and checks for time conflicts as it builds your options.' },
+  { kicker: 'YOUR CHOICE, YOUR PLAN', title: 'Choose the week that fits.', copy: 'Compare the alternatives, confirm your favorite, and keep your final calendar.' },
+]
+
+function TrailerOverlay({ onClose }) {
+  const [scene, setScene] = useState(0)
+  useEffect(() => {
+    const onKeyDown = (event) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+  useEffect(() => {
+    if (scene >= trailerScenes.length) return undefined
+    const timer = window.setTimeout(() => setScene((current) => current + 1), 4300)
+    return () => window.clearTimeout(timer)
+  }, [scene])
+
+  const isEndCard = scene >= trailerScenes.length
+  const currentScene = trailerScenes[Math.min(scene, trailerScenes.length - 1)]
+
+  return (
+    <div className="trailer-backdrop" role="presentation" onClick={onClose}>
+      <section className="trailer-stage" role="dialog" aria-modal="true" aria-label="MyTerm motion trailer" onClick={(event) => event.stopPropagation()}>
+        <div className="trailer-stars" aria-hidden="true">{warpStars.map((star, index) => <i key={index} style={{ '--star-x': star.x, '--star-y': star.y, '--star-size': star.size, '--star-duration': star.duration, '--star-delay': star.delay }} />)}</div>
+        <div className="trailer-planet" aria-hidden="true" />
+        <div className="trailer-calendar" aria-hidden="true">
+          <div className="trailer-calendar-head"><span>TIME</span>{['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'].map((day) => <span key={day}>{day}</span>)}</div>
+          {['09:00', '11:00', '01:00', '03:00'].map((time, row) => <div className="trailer-calendar-row" key={time}><span>{time}</span>{Array.from({ length: 7 }, (_, column) => <span className={(row * 2 + column) % 5 === 1 ? 'trailer-class' : ''} key={column}>{(row * 2 + column) % 5 === 1 ? <i /> : null}</span>)}</div>)}
+        </div>
+        <div className="trailer-topline"><span><Icon name="Orbit" size={16} /> MYTERM · A WEEKLY PLANNER</span><button type="button" className="trailer-close" onClick={onClose}><Icon name="X" size={18} /><span>Skip</span></button></div>
+        {!isEndCard ? (
+          <div className="trailer-copy" key={scene}>
+            <p>{currentScene.kicker}</p><h2>{currentScene.title}</h2><span>{currentScene.copy}</span>
+          </div>
+        ) : (
+          <div className="trailer-endcard"><span className="trailer-logo"><Icon name="CalendarDays" size={24} /></span><p>MYTERM</p><h2>May the Schedule,<br />be with you.</h2><button type="button" className="btn primary" onClick={onClose}>Start planning <Icon name="ArrowRight" size={16} /></button></div>
+        )}
+        <div className="trailer-progress" aria-hidden="true"><i key={scene} className={isEndCard ? 'complete' : ''} /></div>
+        <p className="trailer-caption">A clearer path through your class schedule.</p>
+      </section>
+    </div>
+  )
 }
 
 function App() {
   const [loggedIn, setLoggedIn] = useState(false)
   const [accountToken, setAccountToken] = useState('')
-  const [hydrated, setHydrated] = useState(false)
+  const [loginDarkMode, setLoginDarkMode] = useState(true)
+  const [trailerOpen, setTrailerOpen] = useState(false)
   const [username, setUsername] = useState('')
   const [loginPassword, setLoginPassword] = useState('')
   const [authMode, setAuthMode] = useState('login')
   const [accountForm, setAccountForm] = useState({ name: '', username: '', email: '', password: '', course: '', year: 'First year' })
   const [view, setView] = useState('schedule')
   const [mode, setMode] = useState('week')
+  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [profile, setProfile] = useState(emptyProfile)
   const [subjects, setSubjects] = useState([])
@@ -109,20 +302,49 @@ function App() {
   const [generationIssues, setGenerationIssues] = useState([])
   const [generationWasComplete, setGenerationWasComplete] = useState(true)
   const [selectedOption, setSelectedOption] = useState(0)
+  const [confirmedOption, setConfirmedOption] = useState(null)
   const [suggestions, setSuggestions] = useState([])
   const [isGenerating, setIsGenerating] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  const [saveStatus, setSaveStatus] = useState('idle')
+  const [isAuthenticating, setIsAuthenticating] = useState(false)
   const [toast, setToast] = useState('')
+  const saveQueueRef = useRef(Promise.resolve())
+  const saveRevisionRef = useRef(0)
+  const isGuest = loggedIn && !accountToken
+
+  const openSettings = () => {
+    setProfileMenuOpen(false)
+    if (isGuest) {
+      setToast('Settings need a free account. Log out, then choose Create account to customize your planner.')
+      return
+    }
+    setView('settings')
+  }
 
   useEffect(() => {
-    setHydrated(true)
+    setLoginDarkMode(window.localStorage.getItem('myterm-user-theme') !== 'light')
   }, [])
 
   useEffect(() => {
     if (!toast) return undefined
-    const timer = setTimeout(() => setToast(''), 2600)
+    const timer = setTimeout(() => setToast(''), toast.length > 70 ? 5000 : 2600)
     return () => clearTimeout(timer)
   }, [toast])
+
+  useEffect(() => {
+    if (!loggedIn || !accountToken || !profile.reg_username?.trim()) return undefined
+    const revision = ++saveRevisionRef.current
+    const identifier = profile.reg_username.trim()
+    const state = { profile, subjects, schedule, constraints, lockedSections }
+    setSaveStatus('saving')
+    const timer = setTimeout(() => {
+      savePlannerSnapshot(identifier, accountToken, state)
+        .then(() => { if (revision === saveRevisionRef.current) setSaveStatus('saved') })
+        .catch((error) => { if (revision === saveRevisionRef.current) { setSaveStatus('error'); setToast(`Could not save to MongoDB: ${error.message}`) } })
+    }, 650)
+    return () => clearTimeout(timer)
+  }, [loggedIn, accountToken, profile, subjects, schedule, constraints, lockedSections])
 
   const conflicts = useMemo(
     () =>
@@ -152,10 +374,6 @@ function App() {
 
     if (locked) {
       setSubjects((current) => current.map((item) => item.id === subject.id ? { ...item, selectedSectionId: section.id } : item))
-      setSchedule((current) => [
-        ...current.filter((item) => item.subject_id !== subject.id && item.subject_code !== subject.subject_code),
-        ...toScheduleEntries(subject, section),
-      ])
       setToast(`${subject.subject_code} ${section.section_code} locked.`)
     } else {
       setToast(`${subject.subject_code} unlocked.`)
@@ -171,17 +389,31 @@ function App() {
       sections: Array.isArray(details.sections) ? details.sections : [],
       included: details.included ?? true,
     }
+    newSubject.calendarSectionIds = availableSections(newSubject).map((section) => section.id)
     setSubjects((current) => [...current, newSubject])
+    if (newSubject.calendarSectionIds.length) {
+      setSchedule((current) => [...current, ...calendarEntriesFor(newSubject, newSubject.calendarSectionIds)])
+    }
     return newSubject.id
   }
 
   const saveSubject = (subject) => {
+    const existing = subjects.find((item) => item.id === subject.id)
+    const availableIds = availableSections(subject).map((section) => section.id)
+    const priorIds = Array.isArray(existing?.calendarSectionIds)
+      ? existing.calendarSectionIds
+      : availableSections(existing || subject).map((section) => section.id)
+    const newSectionIds = (subject.sections || []).filter((section) =>
+      !existing?.sections?.some((oldSection) => oldSection.id === section.id) && availableIds.includes(section.id),
+    ).map((section) => section.id)
+    const calendarSectionIds = [...new Set([...priorIds.filter((id) => availableIds.includes(id)), ...newSectionIds])]
+    const savedSubject = { ...subject, calendarSectionIds }
     setSubjects((current) => {
       const exists = current.some((item) => item.id === subject.id)
       if (exists) {
-        return current.map((item) => (item.id === subject.id ? subject : item))
+        return current.map((item) => (item.id === subject.id ? savedSubject : item))
       }
-      return [...current, { ...subject, id: subject.id || uid('sub') }]
+      return [...current, { ...savedSubject, id: subject.id || uid('sub') }]
     })
     const selectedSection = (subject.sections || []).find((section) => section.id === getSelectedSectionId(subject, lockedSections))
     setLockedSections((current) => current.flatMap((locked) => {
@@ -192,7 +424,7 @@ function App() {
     }))
     setSchedule((current) => [
       ...current.filter((entry) => entry.subject_id !== subject.id),
-      ...(selectedSection ? toScheduleEntries(subject, selectedSection) : []),
+      ...calendarEntriesFor(savedSubject, calendarSectionIds),
     ])
   }
 
@@ -200,32 +432,48 @@ function App() {
     const subject = subjects.find((item) => item.id === subjectId)
     const section = subject?.sections?.find((item) => item.id === sectionId)
     if (!subject || !section) return
-    const selectedId = getSelectedSectionId(subject, lockedSections)
-    const nextSelection = selected ? sectionId : selectedId === sectionId ? null : selectedId
-    setSubjects((current) => current.map((item) => item.id === subjectId ? { ...item, selectedSectionId: nextSelection } : item))
-    setLockedSections((current) => current.filter((section) => section.subject_id !== subjectId))
+    const selectedIds = Array.isArray(subject.calendarSectionIds)
+      ? subject.calendarSectionIds
+      : availableSections(subject).map((item) => item.id)
+    const nextIds = selected
+      ? [...new Set([...selectedIds, sectionId])]
+      : selectedIds.filter((id) => id !== sectionId)
+    setSubjects((current) => current.map((item) => item.id === subjectId ? { ...item, calendarSectionIds: nextIds } : item))
     setSchedule((current) => [
       ...current.filter((entry) => entry.subject_id !== subjectId),
-      ...(selected ? toScheduleEntries(subject, section) : []),
+      ...calendarEntriesFor(subject, nextIds),
     ])
   }
 
-  const includeSubjectForGeneration = (subjectId, included) => {
-    setSubjects((current) => current.map((subject) => subject.id === subjectId ? { ...subject, included } : subject))
+  const selectAllSubjectsInCalendar = () => {
+    const selections = subjects.map((subject) => ({ subject, ids: availableSections(subject).map((section) => section.id) }))
+    const selectedCount = selections.reduce((count, item) => count + item.ids.length, 0)
+    setSubjects((current) => current.map((subject) => ({ ...subject, calendarSectionIds: availableSections(subject).map((section) => section.id) })))
+    setSchedule((current) => [
+      ...current.filter((entry) => !entry.subject_id),
+      ...selections.flatMap(({ subject, ids }) => calendarEntriesFor(subject, ids)),
+    ])
+    setToast(selectedCount
+      ? `Added all ${selectedCount} available sections across ${selections.filter((item) => item.ids.length).length} subjects. Overlapping classes remain visible.`
+      : 'No subjects with available meeting days to add.')
   }
 
   const setSectionUnavailable = (subjectId, sectionId, unavailable) => {
     const subject = subjects.find((item) => item.id === subjectId)
-    const wasSelected = subject && getSelectedSectionId(subject, lockedSections) === sectionId
+    const wasSelected = subject && (subject.calendarSectionIds || availableSections(subject).map((section) => section.id)).includes(sectionId)
     setSubjects((current) => current.map((item) => item.id !== subjectId ? item : {
       ...item,
       sections: item.sections.map((section) => section.id === sectionId ? { ...section, unavailable, available: !unavailable } : section),
-      ...(unavailable && wasSelected ? { selectedSectionId: null } : {}),
+      calendarSectionIds: unavailable
+        ? (item.calendarSectionIds || []).filter((id) => id !== sectionId)
+        : [...new Set([...(item.calendarSectionIds || []), sectionId])],
     }))
-    if (unavailable && wasSelected) {
-      setSchedule((current) => current.filter((entry) => !(entry.subject_id === subjectId && entry.section_id === sectionId)))
-      setLockedSections((current) => current.filter((entry) => entry.id !== sectionId))
-    }
+    const section = subject?.sections.find((item) => item.id === sectionId)
+    setSchedule((current) => [
+      ...current.filter((entry) => !(entry.subject_id === subjectId && entry.section_id === sectionId)),
+      ...(!unavailable && subject && section ? toScheduleEntries(subject, { ...section, available: true, unavailable: false }) : []),
+    ])
+    setLockedSections((current) => current.filter((entry) => entry.id !== sectionId))
   }
 
   const removeSubject = (subjectId) => {
@@ -262,6 +510,7 @@ function App() {
       id: editing.id || uid('class'),
       subject_code: editing.subject_code || 'GEN',
       section_code: editing.section_code || 'A',
+      day: dayFromDate(editing.meeting_date) || editing.day,
     }
 
     setSchedule((current) => {
@@ -282,25 +531,22 @@ function App() {
   }
 
   const generateOptions = async () => {
-    const includedSubjects = subjects.filter((subject) => subject.included !== false)
+    const includedSubjects = subjects
     const hasIncompleteSubject = includedSubjects.some((subject) => {
-      const sections = Array.isArray(subject.sections) ? subject.sections : []
-      const selectedSection = sections.find((section) => section.id === getSelectedSectionId(subject, lockedSections))
+      const sections = availableSections(subject)
       return !subject.subject_name?.trim() ||
         !subject.subject_code?.trim() ||
-        !selectedSection ||
-        !selectedSection.section_code?.trim() ||
-        getMeetingSlots(selectedSection).length === 0 ||
-        getMeetingSlots(selectedSection).some((meeting) =>
+        !sections.length ||
+        sections.every((section) => !section.section_code?.trim() || getMeetingSlots(section).some((meeting) =>
           !DAYS.includes(meeting.day) ||
           !/^\d{2}:\d{2}$/.test(meeting.time_start || '') ||
           !/^\d{2}:\d{2}$/.test(meeting.time_end || '') ||
           toMinutes(meeting.time_end) <= toMinutes(meeting.time_start),
-        )
+        ))
     })
     if (hasIncompleteSubject) {
       setGeneratedOptions([])
-      setGenerationIssues(['Choose one section for each subject and make sure it has a section code, day, and valid start and end times.'])
+      setGenerationIssues(['Each included subject needs at least one available section with a code, meeting day, and valid start and end times.'])
       setSuggestions([])
       setGenerationWasComplete(true)
       setModal('review')
@@ -342,10 +588,39 @@ function App() {
     }
   }
 
-  const useGeneratedSchedule = (option) => {
-    setSchedule(option.schedule || [])
+  const useGeneratedSchedule = (option, closeReview = true) => {
+    const acceptedSchedule = option.schedule || []
+    setSchedule(acceptedSchedule)
+    const selectedBySubject = new Map()
+    acceptedSchedule.forEach((entry) => {
+      if (!entry.subject_id || !entry.section_id) return
+      selectedBySubject.set(entry.subject_id, [...(selectedBySubject.get(entry.subject_id) || []), entry.section_id])
+    })
+    setSubjects((current) => current.map((subject) => ({
+      ...subject,
+      calendarSectionIds: [...new Set(selectedBySubject.get(subject.id) || [])],
+      selectedSectionId: [...new Set(selectedBySubject.get(subject.id) || [])][0] || null,
+    })))
+    const firstDatedMeeting = acceptedSchedule.find((entry) => entry.meeting_date)?.meeting_date
+    if (firstDatedMeeting) setWeekStart(startOfWeek(`${firstDatedMeeting}T00:00:00`))
+    setMode('week')
+    if (closeReview) setModal(null)
+    setToast(`${selectedOption === 0 ? 'Best-fit schedule' : `Option ${selectedOption + 1}`} accepted and added to your final calendar.`)
+  }
+
+  const confirmSelectedOption = () => {
+    const option = generatedOptions[selectedOption]
+    if (!option) return
+    setConfirmedOption(selectedOption)
+    useGeneratedSchedule(option, false)
+  }
+
+  const downloadConfirmedSchedule = () => {
+    const option = generatedOptions[confirmedOption]
+    if (!option?.schedule?.length) return
+    downloadSchedulePdf(option.schedule, profile)
     setModal(null)
-    setToast('Generated schedule applied.')
+    setToast('Confirmed schedule downloaded as a PDF.')
   }
 
   const applySuggestion = (suggestion) => {
@@ -365,14 +640,39 @@ function App() {
       if (!response.ok) return false
       const state = await response.json()
       if (state.profile) setProfile((current) => ({ ...current, ...state.profile }))
-      if (Array.isArray(state.subjects)) setSubjects(state.subjects)
-      if (Array.isArray(state.schedule)) setSchedule(state.schedule)
+      if (Array.isArray(state.subjects)) {
+        const restoredSubjects = restoreCalendarSelections(state.subjects)
+        setSubjects(restoredSubjects)
+        const manualEntries = (state.schedule || []).filter((entry) => !entry.subject_id)
+        setSchedule([...manualEntries, ...restoredSubjects.flatMap((subject) => calendarEntriesFor(subject, subject.calendarSectionIds))])
+      } else if (Array.isArray(state.schedule)) setSchedule(state.schedule)
       if (state.constraints) setConstraints((current) => ({ ...current, ...state.constraints }))
       if (Array.isArray(state.lockedSections)) setLockedSections(state.lockedSections)
       return true
     } catch {
       return false
     }
+  }
+
+  const savePlannerSnapshot = (identifier, token, state) => {
+    const queuedSave = saveQueueRef.current.catch(() => {}).then(async () => {
+      const response = await fetch(`/api/accounts/${encodeURIComponent(identifier)}/state`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(state),
+      })
+      const result = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(result.error || `Save failed (${response.status}).`)
+    })
+    saveQueueRef.current = queuedSave
+    return queuedSave
+  }
+
+  const savePlannerStateToBackend = async () => {
+    if (!accountToken) throw new Error('Sign in to an account to save your planner online.')
+    const identifier = profile.reg_username?.trim()
+    if (!identifier) throw new Error('Add a username in Settings before saving online.')
+    await savePlannerSnapshot(identifier, accountToken, { profile, subjects, schedule, constraints, lockedSections })
   }
 
   const savePlannerState = async () => {
@@ -387,16 +687,14 @@ function App() {
     }
 
     setIsSaving(true)
+    setSaveStatus('saving')
     try {
-      const response = await fetch(`/api/accounts/${encodeURIComponent(identifier)}/state`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accountToken}` },
-        body: JSON.stringify({ profile, subjects, schedule, constraints, lockedSections }),
-      })
-      if (!response.ok) throw new Error('Save failed')
+      await savePlannerStateToBackend()
+      setSaveStatus('saved')
       setToast('Planner saved to the backend.')
-    } catch {
-      setToast('Saved on this device; backend is unavailable.')
+    } catch (error) {
+      setSaveStatus('error')
+      setToast(`Could not save to MongoDB: ${error.message}`)
     } finally {
       setIsSaving(false)
     }
@@ -413,9 +711,8 @@ function App() {
 
   const clearCalendar = () => {
     setSchedule([])
-    setLockedSections([])
-    setSubjects((current) => current.map((subject) => ({ ...subject, included: false, selectedSectionId: null })))
-    setToast('Calendar cleared and subjects unselected.')
+    setSubjects((current) => current.map((subject) => ({ ...subject, calendarSectionIds: [] })))
+    setToast('Calendar cleared. Subject generation preferences are unchanged.')
   }
 
   const resetConstraints = () => {
@@ -429,6 +726,7 @@ function App() {
       setToast('Enter your username/email and password.')
       return
     }
+    setIsAuthenticating(true)
     try {
       const response = await fetch('/api/auth/login', {
         method: 'POST',
@@ -438,9 +736,10 @@ function App() {
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || 'Login failed.')
       setAccountToken(result.token)
-      setProfile(result.user.profile)
-      setSubjects(result.user.subjects || [])
-      setSchedule(result.user.schedule || [])
+      setProfile({ ...emptyProfile, ...result.user.profile, theme_pref: result.user.profile.theme_pref ?? (loginDarkMode ? 'dark' : 'light') })
+      const restoredSubjects = restoreCalendarSelections(result.user.subjects || [])
+      setSubjects(restoredSubjects)
+      setSchedule([...(result.user.schedule || []).filter((entry) => !entry.subject_id), ...restoredSubjects.flatMap((subject) => calendarEntriesFor(subject, subject.calendarSectionIds))])
       setConstraints((current) => ({ ...current, ...(result.user.constraints || {}) }))
       setLockedSections(result.user.lockedSections || [])
       setLoggedIn(true)
@@ -448,6 +747,8 @@ function App() {
       setToast('Welcome back.')
     } catch (error) {
       setToast(error.message)
+    } finally {
+      setIsAuthenticating(false)
     }
   }
 
@@ -460,6 +761,7 @@ function App() {
       setToast('Complete your name, username, email, and password.')
       return
     }
+    setIsAuthenticating(true)
     try {
       const response = await fetch('/api/auth/register', {
         method: 'POST',
@@ -476,7 +778,7 @@ function App() {
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || 'Registration failed.')
       setAccountToken(result.token)
-      setProfile(result.user.profile)
+      setProfile({ ...emptyProfile, ...result.user.profile, theme_pref: result.user.profile.theme_pref ?? (loginDarkMode ? 'dark' : 'light') })
       setSubjects([])
       setSchedule([])
       setLockedSections([])
@@ -486,34 +788,50 @@ function App() {
       setToast(`Welcome, ${cleanName}.`)
     } catch (error) {
       setToast(error.message)
+    } finally {
+      setIsAuthenticating(false)
     }
   }
 
   const continueAsGuest = () => {
     setProfile((current) => ({ ...current, profile_name: current.profile_name || 'Guest Planner', reg_username: current.reg_username || 'guest' }))
+    setView('schedule')
     setLoggedIn(true)
     setToast('Guest planner ready.')
   }
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    let saveFailed = false
     if (accountToken) {
-      fetch('/api/auth/logout', { method: 'POST', headers: { Authorization: `Bearer ${accountToken}` } }).catch(() => {})
+      try {
+        await savePlannerStateToBackend()
+      } catch {
+        saveFailed = true
+      }
+      await fetch('/api/auth/logout', { method: 'POST', headers: { Authorization: `Bearer ${accountToken}` } }).catch(() => {})
     }
     setAccountToken('')
     setLoggedIn(false)
+    setView('schedule')
     setProfile(emptyProfile)
     setSubjects([])
     setSchedule([])
     setLockedSections([])
     setConstraints(emptyConstraints)
     setProfileMenuOpen(false)
-    setToast('You have been signed out.')
+    setSaveStatus('idle')
+    setToast(saveFailed ? 'Signed out, but the latest changes could not be saved. Check your connection and save before signing out next time.' : 'You have been signed out. Your planner is saved to your account.')
   }
 
   return (
-    <div className={hydrated && profile.theme_pref === 'dark' ? 'app-shell dark-theme' : 'app-shell'}>
+    <div className={loggedIn ? (profile.theme_pref === 'light' ? 'app-shell' : 'app-shell dark-theme') : (loginDarkMode ? 'app-shell dark-theme' : 'app-shell')}>
       {!loggedIn ? (
         <div className="login-screen">
+          <button type="button" className="login-theme-toggle" onClick={() => setLoginDarkMode((dark) => {
+            const next = !dark
+            window.localStorage.setItem('myterm-user-theme', next ? 'dark' : 'light')
+            return next
+          })}>{loginDarkMode ? 'Light mode' : 'Dark mode'}</button>
           <div className="login-card">
             <div className="login-panel">
               <div className="space-warp" aria-hidden="true">
@@ -552,6 +870,7 @@ function App() {
                   <strong>Smart alternatives</strong>
                 </div>
               </div>
+              <button type="button" className="trailer-launch" onClick={() => setTrailerOpen(true)}><span><Icon name="Play" size={15} /></span> Watch the MyTerm trailer <Icon name="ArrowUpRight" size={14} /></button>
             </div>
 
             <div className="login-form">
@@ -572,7 +891,7 @@ function App() {
                     Password
                     <input type="password" value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} />
                   </label>
-                  <button type="submit" className="btn primary full">Continue</button>
+                  <button type="submit" className="btn primary full" disabled={isAuthenticating}>{isAuthenticating ? <><Icon name="LoaderCircle" size={16} className="icon-spin" /> Signing in…</> : 'Continue'}</button>
                   <button type="button" className="btn secondary full" onClick={continueAsGuest}>Continue as guest</button>
                 </form>
               ) : (
@@ -607,7 +926,7 @@ function App() {
                       </select>
                     </label>
                   </div>
-                  <button type="submit" className="btn primary full">Create account</button>
+                  <button type="submit" className="btn primary full" disabled={isAuthenticating}>{isAuthenticating ? <><Icon name="LoaderCircle" size={16} className="icon-spin" /> Creating account…</> : 'Create account'}</button>
                 </form>
               )}
             </div>
@@ -620,14 +939,24 @@ function App() {
               <div className="brand-pill"><Icon name="CalendarDays" size={18} /></div>
               <div className="top-brand"><strong>MyTerm</strong><span>May the Schedule, be with you.</span></div>
               <nav className="nav-list">
-                {['schedule', 'subjects', 'settings'].map((tab) => (
+                {['schedule', 'subjects', 'settings', 'about'].map((tab) => (
                   <button
                     key={tab}
                     type="button"
-                    className={view === tab ? 'nav active' : 'nav'}
-                    onClick={() => { setView(tab); setProfileMenuOpen(false) }}
+                    className={`nav${view === tab ? ' active' : ''}${tab === 'settings' && isGuest ? ' restricted' : ''}`}
+                    aria-label={tab === 'settings' && isGuest ? 'Settings, free account required' : undefined}
+                    title={tab === 'settings' && isGuest ? 'Create a free account to customize planner settings' : undefined}
+                    onClick={() => {
+                      if (tab === 'settings' && isGuest) {
+                        setProfileMenuOpen(false)
+                        setToast('Settings need a free account. Log out, then choose Create account to customize your planner.')
+                        return
+                      }
+                      setView(tab)
+                      setProfileMenuOpen(false)
+                    }}
                   >
-                    {tab === 'schedule' ? 'My Schedule' : tab === 'subjects' ? 'Subjects' : 'Settings'}
+                    {tab === 'schedule' ? 'My Schedule' : tab === 'subjects' ? 'Subjects' : tab === 'settings' ? (isGuest ? 'Settings 🔒' : 'Settings') : 'About'}
                   </button>
                 ))}
               </nav>
@@ -641,7 +970,7 @@ function App() {
                   <Icon name="ChevronDown" size={15} />
                 </button>
                 {profileMenuOpen && <div className="profile-dropdown">
-                  <button type="button" onClick={() => { setView('settings'); setProfileMenuOpen(false) }}><Icon name="UserRound" size={16} /> Account</button>
+                  <button type="button" onClick={openSettings}><Icon name="UserRound" size={16} /> Account</button>
                   <button type="button" onClick={handleLogout}><Icon name="LogOut" size={16} /> Log out</button>
                 </div>}
               </div>
@@ -654,7 +983,7 @@ function App() {
                 subjects={subjects}
                 lockedSections={lockedSections}
                 onSelectSection={selectSubjectSection}
-                onIncludeSubject={includeSubjectForGeneration}
+                onSelectAll={selectAllSubjectsInCalendar}
                 onManageSubjects={() => setView('subjects')}
               />
             )}
@@ -664,6 +993,8 @@ function App() {
                   schedule={schedule}
                   mode={mode}
                   setMode={setMode}
+                  weekStart={weekStart}
+                  setWeekStart={setWeekStart}
                   conflicts={conflicts}
                   suggestions={suggestions}
                   applySuggestion={applySuggestion}
@@ -673,6 +1004,8 @@ function App() {
                   onSave={savePlannerState}
                   onClear={clearCalendar}
                   isSaving={isSaving}
+                  saveStatus={saveStatus}
+                  hasAccount={Boolean(accountToken)}
                 />
               )}
 
@@ -685,12 +1018,15 @@ function App() {
                   isSectionLocked={isSectionLocked}
                   onToggleLock={toggleLock}
                   onToggleUnavailable={setSectionUnavailable}
+                  isGuest={isGuest}
                 />
               )}
 
-              {view === 'settings' && (
+              {view === 'settings' && !isGuest && (
                 <SettingsPanel profile={profile} setProfile={setProfile} resetSemester={resetSemester} onSave={savePlannerState} isSaving={isSaving} />
               )}
+
+              {view === 'about' && <AboutPanel onPlayTrailer={() => setTrailerOpen(true)} />}
             </main>
 
             {view === 'schedule' && <ConstraintRail constraints={constraints} setConstraints={setConstraints} onGenerate={generateOptions} isGenerating={isGenerating} onReset={resetConstraints} />}
@@ -729,6 +1065,10 @@ function App() {
                   </select>
                 </label>
                 <label>
+                  Specific date <span className="optional-label">optional, for one-time meetings</span>
+                  <input type="date" value={editing.meeting_date || ''} onChange={(event) => setEditing({ ...editing, meeting_date: event.target.value })} />
+                </label>
+                <label>
                   Start time
                   <input type="time" value={editing.time_start} onChange={(event) => setEditing({ ...editing, time_start: event.target.value })} />
                 </label>
@@ -747,6 +1087,7 @@ function App() {
               </div>
 
               <div className="modal-actions">
+                {editing.id && <button type="button" className="btn danger" onClick={() => { removeClass(editing.id); setModal(null); setToast('Class removed.') }}>Delete class</button>}
                 <button type="button" className="btn secondary" onClick={() => setModal(null)}>Cancel</button>
                 <button type="submit" className="btn primary">Save</button>
               </div>
@@ -757,11 +1098,12 @@ function App() {
 
       {modal === 'review' && (
         <div className="modal-backdrop" onClick={() => setModal(null)}>
-          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+          <div className="modal-card schedule-review-modal" onClick={(event) => event.stopPropagation()}>
             <div className="modal-header">
-              <h3>Review schedule</h3>
+              <h3>Choose your schedule</h3>
               <button type="button" className="icon-btn" onClick={() => setModal(null)}><Icon name="X" size={16} /></button>
             </div>
+            {generatedOptions.length > 0 && <p className="form-hint">Select an option, confirm it as your final calendar, then download that selected schedule as a PDF.</p>}
 
             {generationIssues.length > 0 && (
               <div className="warning-banner generation-message">
@@ -773,37 +1115,44 @@ function App() {
 
             <div className="review-list">
               {generatedOptions.length > 0 ? (
-                generatedOptions.map((option, index) => (
+                generatedOptions.map((option, index) => {
+                  const chosenSections = [...new Map(option.schedule.filter((entry) => entry.subject_id && entry.section_id).map((entry) => [`${entry.subject_id}:${entry.section_id}`, { subject_id: entry.subject_id, section_id: entry.section_id, entries: [] }])).values()]
+                  chosenSections.forEach((choice) => { choice.entries = option.schedule.filter((entry) => entry.subject_id === choice.subject_id && entry.section_id === choice.section_id) })
+                  return (
                   <button
                     key={index}
                     type="button"
                     className={selectedOption === index ? 'review-item selected' : 'review-item'}
-                    onClick={() => setSelectedOption(index)}
+                    onClick={() => { setSelectedOption(index); setConfirmedOption(null) }}
                   >
-                    <strong>Option {index + 1}</strong>
-                    <span>{new Set(option.schedule.filter((entry) => entry.subject_id).map((entry) => entry.subject_id)).size} of {subjects.filter((subject) => subject.included !== false).length} subjects · Preference score {option.metrics.score}/100</span>
-                    <small>{option.metrics.conflicts} conflicts · {option.metrics.school_days} days · {option.metrics.gaps}h gaps · longest run {option.metrics.longest_consecutive_hours}h</small>
+                    <span className="review-option-heading"><strong>{index === 0 ? 'Best fit for your preferences' : `Option ${index + 1}`}</strong>{index === 0 && <span className="recommendation-badge">RECOMMENDED</span>}</span>
+                    <span>{new Set(option.schedule.filter((entry) => entry.subject_id).map((entry) => entry.subject_id)).size} of {subjects.length} subjects · Break fit {option.metrics.score}/100</span>
+                    <span className="review-subject-options">{chosenSections.map((choice) => <span key={`${choice.subject_id}:${choice.section_id}`}><strong>{choice.entries[0]?.subject_code}</strong> · {choice.entries[0]?.section_code} · {choice.entries.map((entry) => `${entry.meeting_date || entry.day} ${fmtTime(entry.time_start)}–${fmtTime(entry.time_end)}${entry.room ? ` ${entry.room}` : ''}`).join(' / ')}</span>)}</span>
+                    <small>{option.metrics.conflicts} conflicts · {option.metrics.outside_shift_meetings || 0} classes outside shift · {option.metrics.school_days} days · {option.metrics.gaps}h gaps · longest run {option.metrics.longest_consecutive_hours}h</small>
                   </button>
-                ))
+                )})
               ) : (
-                <p>No valid schedule options.</p>
+                <p>No complete conflict-free schedule fits every included subject and the selected shift. Try another break preference, unlock a section, or check for overlapping section times.</p>
               )}
             </div>
 
             <div className="modal-actions">
-              <button type="button" className="btn secondary" onClick={() => setModal(null)}>Keep current</button>
-              {generatedOptions.length > 0 && <button type="button" className="btn primary" onClick={() => useGeneratedSchedule(generatedOptions[selectedOption])}>Use this plan</button>}
+              <button type="button" className="btn secondary" onClick={() => { setModal(null); setToast('Schedule declined. Your current calendar was kept.') }}>Decline · Keep current calendar</button>
+              {generatedOptions.length > 0 && confirmedOption === selectedOption
+                ? <button type="button" className="btn primary" onClick={downloadConfirmedSchedule}><Icon name="Download" size={15} /> Download confirmed schedule PDF</button>
+                : generatedOptions.length > 0 && <button type="button" className="btn primary" onClick={confirmSelectedOption}><Icon name="Check" size={15} /> Confirm selected schedule</button>}
             </div>
           </div>
         </div>
       )}
 
       {toast && <div className="toast">{toast}</div>}
+      {trailerOpen && <TrailerOverlay onClose={() => setTrailerOpen(false)} />}
     </div>
   )
 }
 
-function SubjectPoolPanel({ subjects, lockedSections, onSelectSection, onIncludeSubject, onManageSubjects }) {
+function SubjectPoolPanel({ subjects, onSelectSection, onSelectAll, onManageSubjects }) {
   const [query, setQuery] = useState('')
   const [expandedSubjects, setExpandedSubjects] = useState({})
   const normalizedQuery = query.trim().toLowerCase()
@@ -834,10 +1183,15 @@ function SubjectPoolPanel({ subjects, lockedSections, onSelectSection, onInclude
       </label>
 
       {subjects.length > 0 && (
-        <button type="button" className="pool-expand-all" onClick={toggleAll}>
-          <Icon name={allExpanded ? 'ChevronsUp' : 'ChevronsDown'} size={15} />
-          {allExpanded ? 'Collapse all' : 'Expand all'}
-        </button>
+        <div className="pool-tools">
+          <button type="button" className="pool-expand-all" onClick={toggleAll}>
+            <Icon name={allExpanded ? 'ChevronsUp' : 'ChevronsDown'} size={15} />
+            {allExpanded ? 'Collapse all' : 'Expand all'}
+          </button>
+          <button type="button" className="pool-select-all" onClick={onSelectAll} title="Add every available section for every subject to the calendar, including overlaps.">
+            <Icon name="ListChecks" size={15} /> Select all sections
+          </button>
+        </div>
       )}
 
       {subjects.length === 0 ? (
@@ -851,15 +1205,13 @@ function SubjectPoolPanel({ subjects, lockedSections, onSelectSection, onInclude
         <div className="subject-pool-list">
           {visibleSubjects.map((subject) => {
             const sections = Array.isArray(subject.sections) ? subject.sections : []
-            const selectedSectionId = getSelectedSectionId(subject, lockedSections)
-            const selectedCount = sections.some((section) => section.id === selectedSectionId) ? 1 : 0
+            const selectedSectionIds = Array.isArray(subject.calendarSectionIds)
+              ? subject.calendarSectionIds
+              : availableSections(subject).map((section) => section.id)
+            const selectedCount = sections.filter((section) => selectedSectionIds.includes(section.id)).length
             return (
               <article key={subject.id} className="subject-pool-group">
                 <div className="subject-pool-group-head">
-                  <label className="pool-include-toggle" title="Include this subject in schedule generation">
-                    <input type="checkbox" checked={subject.included !== false} onChange={(event) => onIncludeSubject(subject.id, event.target.checked)} />
-                    <span>Include</span>
-                  </label>
                   <button
                     type="button"
                     className="pool-subject-toggle"
@@ -868,7 +1220,7 @@ function SubjectPoolPanel({ subjects, lockedSections, onSelectSection, onInclude
                   >
                   <span className="subject-pool-title">
                     <strong>{subject.subject_code || 'New subject'}</strong>
-                    <small>{subject.subject_name || 'Add a subject name'}</small>
+                    <small>{subject.subject_name || 'Add a subject name'} · Required for generation</small>
                   </span>
                   <span className="subject-pool-count">{selectedCount} selected</span>
                     <Icon name={expandedSubjects[subject.id] ? 'ChevronUp' : 'ChevronDown'} size={16} />
@@ -882,13 +1234,13 @@ function SubjectPoolPanel({ subjects, lockedSections, onSelectSection, onInclude
                     <label key={section.id} className="pool-section-option">
                       <input
                         type="checkbox"
-                        checked={selectedSectionId === section.id}
+                        checked={selectedSectionIds.includes(section.id)}
                         disabled={unavailable}
                         onChange={(event) => onSelectSection(subject.id, section.id, event.target.checked)}
                       />
                       <span>
                         <strong>{section.section_code || 'Section'}{unavailable ? ' · Unavailable' : ''}</strong>
-                        <small>{meetings.length ? meetings.map((meeting) => `${meeting.day.slice(0, 3)} ${fmtTime(meeting.time_start)}–${fmtTime(meeting.time_end)}`).join(' · ') : 'No meeting times added'}</small>
+                        <small>{meetings.length ? meetings.map((meeting) => `${(dayFromDate(meeting.meeting_date) || meeting.day).slice(0, 3)}${meeting.meeting_date ? ` ${meeting.meeting_date}` : ''} ${fmtTime(meeting.time_start)}–${fmtTime(meeting.time_end)}`).join(' · ') : 'No meeting times added'}</small>
                       </span>
                     </label>
                     )
@@ -903,7 +1255,7 @@ function SubjectPoolPanel({ subjects, lockedSections, onSelectSection, onInclude
   )
 }
 
-function ScheduleView({ schedule, mode, setMode, conflicts, suggestions, applySuggestion, openClassModal, removeClass, onSave, onClear, isSaving }) {
+function ScheduleView({ schedule, mode, setMode, weekStart, setWeekStart, conflicts, suggestions, applySuggestion, openClassModal, removeClass, onSave, onClear, isSaving, saveStatus, hasAccount }) {
   return (
     <section className="page-panel">
       <div className="page-head">
@@ -914,7 +1266,8 @@ function ScheduleView({ schedule, mode, setMode, conflicts, suggestions, applySu
         <div className="head-buttons">
           <button type="button" className={mode === 'week' ? 'btn primary' : 'btn secondary'} onClick={() => setMode('week')}>Week</button>
           <button type="button" className={mode === 'list' ? 'btn primary' : 'btn secondary'} onClick={() => setMode('list')}>List</button>
-          <button type="button" className="btn secondary" onClick={onSave} disabled={isSaving}><Icon name="CloudUpload" size={15} /> {isSaving ? 'Saving...' : 'Save'}</button>
+          {hasAccount && <span className={`sync-status ${saveStatus}`} role="status" aria-live="polite">{saveStatus === 'saving' ? 'Saving to MongoDB…' : saveStatus === 'saved' ? 'Saved to MongoDB' : saveStatus === 'error' ? 'Save failed · retry with Save' : ''}</span>}
+          <button type="button" className="btn secondary" onClick={onSave} disabled={isSaving}><Icon name={isSaving ? 'LoaderCircle' : 'CloudUpload'} size={15} className={isSaving ? 'icon-spin' : undefined} /> {isSaving ? 'Saving...' : 'Save'}</button>
           <button type="button" className="btn secondary" onClick={onClear}><Icon name="RotateCcw" size={15} /> Clear</button>
         </div>
       </div>
@@ -951,7 +1304,7 @@ function ScheduleView({ schedule, mode, setMode, conflicts, suggestions, applySu
           <button type="button" className="btn primary" onClick={() => openClassModal()}>Add class manually</button>
         </div>
       ) : mode === 'week' ? (
-        <WeekGrid schedule={schedule} openClassModal={openClassModal} />
+        <WeekGrid schedule={schedule} weekStart={weekStart} setWeekStart={setWeekStart} openClassModal={openClassModal} />
       ) : (
         <ListView schedule={schedule} openClassModal={openClassModal} removeClass={removeClass} />
       )}
@@ -959,15 +1312,28 @@ function ScheduleView({ schedule, mode, setMode, conflicts, suggestions, applySu
   )
 }
 
-function WeekGrid({ schedule, openClassModal }) {
-  const today = DAYS[new Date().getDay()]
+function WeekGrid({ schedule, weekStart, setWeekStart, openClassModal }) {
+  const weekDates = DAYS.map((_, index) => {
+    const date = new Date(weekStart)
+    date.setDate(date.getDate() + index)
+    return date
+  })
+  const todayKey = dateKey(new Date())
+  const weekLabel = `${weekDates[0].toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${weekDates[6].toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`
 
   return (
+    <>
+    <div className="week-navigation">
+      <button type="button" className="icon-btn" aria-label="Previous week" onClick={() => setWeekStart((current) => { const next = new Date(current); next.setDate(next.getDate() - 7); return next })}><Icon name="ChevronLeft" size={17} /></button>
+      <strong>{weekLabel}</strong>
+      <button type="button" className="icon-btn" aria-label="Next week" onClick={() => setWeekStart((current) => { const next = new Date(current); next.setDate(next.getDate() + 7); return next })}><Icon name="ChevronRight" size={17} /></button>
+      <button type="button" className="btn secondary compact" onClick={() => setWeekStart(startOfWeek(new Date()))}>Today</button>
+    </div>
     <div className="week-board">
       <div className="week-head">
         <div className="time-heading">Time</div>
-        {DAYS.map((day) => (
-          <div key={day} className={day === today ? 'day-heading today' : 'day-heading'}>{day.slice(0, 3)}</div>
+        {DAYS.map((day, index) => (
+          <div key={day} className={dateKey(weekDates[index]) === todayKey ? 'day-heading today' : 'day-heading'}><span>{day.slice(0, 3)}</span><small>{weekDates[index].toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</small></div>
         ))}
       </div>
 
@@ -975,18 +1341,19 @@ function WeekGrid({ schedule, openClassModal }) {
         <div key={hour} className="week-row">
           <div className="time-cell">{fmtTime(`${String(hour).padStart(2, '0')}:00`)}</div>
           {DAYS.map((day) => {
-            const items = schedule.filter((entry) => entry.day === day && Number(entry.time_start.slice(0, 2)) === hour)
+            const dayDate = dateKey(weekDates[DAYS.indexOf(day)])
+            const items = schedule.filter((entry) => entry.day === day && (!entry.meeting_date || entry.meeting_date === dayDate) && Number(entry.time_start.slice(0, 2)) === hour)
             return (
               <div
                 key={`${day}-${hour}`}
-                className={day === today ? 'slot today-slot' : 'slot'}
+                className={dayDate === todayKey ? 'slot today-slot' : 'slot'}
                 onDoubleClick={() => openClassModal({ day, time_start: `${String(hour).padStart(2, '0')}:00`, time_end: `${String(hour + 1).padStart(2, '0')}:00` })}
               >
                 {items.map((entry) => (
                   <button type="button" key={entry.id} className="event-card" onClick={() => openClassModal(entry)}>
                     <strong>{entry.subject_code}</strong>
                     <span>{fmtTime(entry.time_start)}–{fmtTime(entry.time_end)}</span>
-                    <small>{entry.section_code}</small>
+                    <small>{entry.meeting_date ? `${entry.meeting_date} · ` : ''}{entry.section_code}{entry.room ? ` · ${entry.room}` : ''}</small>
                   </button>
                 ))}
               </div>
@@ -995,6 +1362,33 @@ function WeekGrid({ schedule, openClassModal }) {
         </div>
       ))}
     </div>
+    </>
+  )
+}
+
+function AboutPanel({ onPlayTrailer }) {
+  const developers = [
+    { name: 'Senopera', emoji: '🦉', alt: 'Owl emoji placeholder for the developer photo' },
+    { name: 'Santos', emoji: '🐢', alt: 'Turtle emoji placeholder for the developer photo' },
+    { name: 'Recio', emoji: '🐱', alt: 'Cat emoji placeholder for the developer photo' },
+    { name: 'Geronimo', emoji: '🐝', alt: 'Bee emoji placeholder for the developer photo' },
+    { name: 'Cinco', emoji: '🦊', alt: 'Fox emoji placeholder for the developer photo' },
+  ]
+
+  return (
+    <section className="page-panel about-page">
+      <div className="page-head"><div><p className="eyebrow">About MyTerm</p><h1>Plan your week with confidence.</h1></div><button type="button" className="btn secondary" onClick={onPlayTrailer}><Icon name="Play" size={15} /> Watch trailer</button></div>
+      <p className="about-intro">MyTerm helps students turn available class sections into clear, conflict-free weekly schedules.</p>
+      <div className="about-pillars">
+        <article className="card about-pillar"><span className="about-icon"><Icon name="Target" size={19} /></span><h2>Our Mission</h2><p>Make class planning easier by helping students compare sections, respect their preferences, and avoid schedule conflicts.</p></article>
+        <article className="card about-pillar"><span className="about-icon"><Icon name="Eye" size={19} /></span><h2>Our Vision</h2><p>Help every student build a balanced school week with a schedule they understand and can confidently follow.</p></article>
+        <article className="card about-pillar"><span className="about-icon"><Icon name="Compass" size={19} /></span><h2>Our Purpose</h2><p>Bring subject sections, meeting days, times, and break preferences together so students can choose a practical weekly plan.</p></article>
+      </div>
+      <section className="developers-section">
+        <div><p className="eyebrow">The team behind MyTerm</p><h2>Meet the Developers</h2><p>Emoji portraits are placeholders for future profile photos.</p></div>
+        <div className="developer-grid">{developers.map((developer) => <article className="card developer-card" key={developer.name}><span className="developer-avatar" role="img" aria-label={developer.alt}>{developer.emoji}</span><h3>{developer.name}</h3><p>MyTerm Developer</p></article>)}</div>
+      </section>
+    </section>
   )
 }
 
@@ -1007,7 +1401,7 @@ function ListView({ schedule, openClassModal, removeClass }) {
           <article key={entry.id} className="list-item">
             <div>
               <strong>{entry.subject_code} · {entry.subject_name}</strong>
-              <p>{entry.section_code} · {entry.day} · {fmtTime(entry.time_start)}–{fmtTime(entry.time_end)}</p>
+              <p>{entry.section_code} · {entry.day}{entry.meeting_date ? ` · ${entry.meeting_date}` : ''} · {fmtTime(entry.time_start)}–{fmtTime(entry.time_end)}{entry.room ? ` · ${entry.room}` : ''}</p>
             </div>
             <div className="list-actions">
               <button type="button" className="btn secondary" onClick={() => openClassModal(entry)}>Edit</button>
@@ -1019,7 +1413,7 @@ function ListView({ schedule, openClassModal, removeClass }) {
   )
 }
 
-function SubjectsPanel({ subjects, onAddSubject, onSave, onRemove, isSectionLocked, onToggleLock, onToggleUnavailable }) {
+function SubjectsPanel({ subjects, onAddSubject, onSave, onRemove, isSectionLocked, onToggleLock, onToggleUnavailable, isGuest }) {
   const [query, setQuery] = useState('')
   const [selectedSubjectId, setSelectedSubjectId] = useState(() => subjects[0]?.id || '')
   const [subjectDraft, setSubjectDraft] = useState({ subject_name: '', subject_code: '' })
@@ -1028,6 +1422,14 @@ function SubjectsPanel({ subjects, onAddSubject, onSave, onRemove, isSectionLock
   const [sectionError, setSectionError] = useState('')
   const [importDraft, setImportDraft] = useState(null)
   const [importMessage, setImportMessage] = useState('')
+  const [isImporting, setIsImporting] = useState(false)
+  const [importPreviewUrl, setImportPreviewUrl] = useState('')
+  const [importConfirmed, setImportConfirmed] = useState(false)
+  const [guestUploads, setGuestUploads] = useState(() => {
+    if (typeof window === 'undefined') return 0
+    const stored = Number(window.localStorage.getItem('myterm-guest-image-uploads') || 0)
+    return Number.isFinite(stored) ? Math.min(3, Math.max(0, stored)) : 0
+  })
   const imageInput = useRef(null)
   const selectedSubject = subjects.find((subject) => subject.id === selectedSubjectId)
   const visibleSubjects = subjects.filter((subject) => `${subject.subject_code} ${subject.subject_name}`.toLowerCase().includes(query.trim().toLowerCase()))
@@ -1045,6 +1447,10 @@ function SubjectsPanel({ subjects, onAddSubject, onSave, onRemove, isSectionLock
     setSectionDraft(null)
     setSectionError('')
   }, [selectedSubjectId])
+
+  useEffect(() => () => {
+    if (importPreviewUrl) URL.revokeObjectURL(importPreviewUrl)
+  }, [importPreviewUrl])
 
   const handleAddSubject = () => {
     const id = onAddSubject()
@@ -1129,15 +1535,33 @@ function SubjectsPanel({ subjects, onAddSubject, onSave, onRemove, isSectionLock
     event.target.value = ''
     if (!file) return
 
+    if (isGuest && guestUploads >= 3) {
+      setImportMessage('You have used all 3 guest image uploads. Creating an account is totally free and lets you continue importing schedules and customize your planner.')
+      return
+    }
+
+    if (isGuest) {
+      const nextCount = guestUploads + 1
+      window.localStorage.setItem('myterm-guest-image-uploads', String(nextCount))
+      setGuestUploads(nextCount)
+    }
+
+    const previewUrl = URL.createObjectURL(file)
+    setImportPreviewUrl((current) => {
+      if (current) URL.revokeObjectURL(current)
+      return previewUrl
+    })
     setImportMessage('Recognizing text in the image…')
+    setIsImporting(true)
     try {
+      // Ipinapadala sa backend ang image para mabasa ng Gemini at ma-cross-check ng local OCR.
       const formData = new FormData()
       formData.append('scheduleImage', file)
       const response = await fetch('/api/ocr/upload', { method: 'POST', body: formData })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || `Image recognition failed (${response.status}).`)
       if (!result.rawText?.trim()) {
-        setImportMessage('No text was detected. Try a clearer screenshot or enter the subject manually.')
+        setImportMessage(result.warnings?.join(' ') || 'No text was detected. Try a clearer screenshot or enter the subject manually.')
         return
       }
       const sections = (result.sections || []).map((section) => ({
@@ -1148,16 +1572,30 @@ function SubjectsPanel({ subjects, onAddSubject, onSave, onRemove, isSectionLock
       }))
       setImportDraft({
         subject_name: result.subject_name || '',
+        subject_name_evidence: result.subject_name_evidence || '',
         subject_code: result.subject_code || '',
+        subject_code_evidence: result.subject_code_evidence || '',
         sections,
         recognizedText: result.rawText,
+        localRawText: result.localRawText || '',
+        recognitionProvider: result.recognitionProvider || 'Local OCR',
+        recognitionConfidence: result.recognitionConfidence,
+        warnings: result.warnings || [],
       })
+      setImportConfirmed(false)
       const meetingCount = sections.reduce((count, section) => count + section.meetings.length, 0)
-      setImportMessage(meetingCount
-        ? `Recognized ${sections.length} section(s) and ${meetingCount} meeting slot(s). Review the imported subject after saving.`
+      setImportMessage(result.warnings?.length
+        ? result.warnings.join(' ')
+        : meetingCount
+        ? `Recognized ${sections.length} section(s) and ${meetingCount} meeting day(s). Review the imported subject after saving.`
         : 'Text was recognized, but no section meeting times were confidently detected. Review the subject details and add section times manually.')
     } catch (error) {
-      setImportMessage(error.message || 'Image recognition failed. Try a different screenshot or enter the subject manually.')
+      const message = String(error.message || '')
+      setImportMessage(/failed to fetch|networkerror|load failed/i.test(message)
+        ? 'MyTerm could not reach its image-reading server. Make sure the backend is running at localhost:5173, then try the image again.'
+        : message || 'Image recognition failed. Try a different screenshot or enter the subject manually.')
+    } finally {
+      setIsImporting(false)
     }
   }
 
@@ -1166,10 +1604,59 @@ function SubjectsPanel({ subjects, onAddSubject, onSave, onRemove, isSectionLock
       setImportMessage('Enter a subject name and code before adding it to the pool.')
       return
     }
+    const sections = importDraft.sections || []
+    const hasIncompleteSection = sections.some((section) =>
+      !section.section_code?.trim() || !section.meetings?.length || section.meetings.some((meeting) =>
+        !DAYS.includes(meeting.day) || !/^\d{2}:\d{2}$/.test(meeting.time_start || '') || !/^\d{2}:\d{2}$/.test(meeting.time_end || '') || toMinutes(meeting.time_end) <= toMinutes(meeting.time_start),
+      ),
+    )
+    if (!sections.length || hasIncompleteSection) {
+      setImportMessage('Review each section and add its code, day, start time, and end time before saving.')
+      return
+    }
+    if (!importConfirmed) {
+      setImportMessage('Compare every detected value with the image and confirm the details before saving.')
+      return
+    }
     const id = onAddSubject({ subject_name: importDraft.subject_name, subject_code: importDraft.subject_code, sections: importDraft.sections })
     setSelectedSubjectId(id)
-    setImportDraft(null)
+    clearImportReview()
     setImportMessage('Imported subject added. Review its sections for accuracy.')
+  }
+
+  const updateImportedSection = (sectionId, changes) => setImportDraft((current) => ({
+    ...current,
+    sections: current.sections.map((section) => section.id === sectionId ? { ...section, ...changes } : section),
+  }))
+
+  const updateImportedMeeting = (sectionId, meetingId, changes) => setImportDraft((current) => ({
+    ...current,
+    sections: current.sections.map((section) => section.id !== sectionId ? section : {
+      ...section,
+      meetings: section.meetings.map((meeting) => meeting.id === meetingId ? { ...meeting, ...changes } : meeting),
+    }),
+  }))
+
+  const addImportedSection = () => setImportDraft((current) => ({
+    ...current,
+    sections: [...current.sections, { id: uid('section'), section_code: '', meetings: [], available: true }],
+  }))
+
+  const clearImportReview = () => {
+    setImportDraft(null)
+    setImportConfirmed(false)
+    setImportPreviewUrl((current) => {
+      if (current) URL.revokeObjectURL(current)
+      return ''
+    })
+  }
+
+  const requestImageImport = () => {
+    if (isGuest && guestUploads >= 3) {
+      setImportMessage('You have used all 3 guest image uploads. Creating an account is totally free and lets you continue importing schedules and customize your planner.')
+      return
+    }
+    imageInput.current?.click()
   }
 
   return (
@@ -1177,12 +1664,14 @@ function SubjectsPanel({ subjects, onAddSubject, onSave, onRemove, isSectionLock
       <div className="page-head">
         <div><p className="eyebrow">Course data</p><h1>Subjects</h1></div>
         <div className="subject-page-actions">
-          <input ref={imageInput} className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={importImage} />
-          <button type="button" className="btn secondary" onClick={() => imageInput.current?.click()}><Icon name="ImageUp" size={16} /> Import from image</button>
+          <input ref={imageInput} className="visually-hidden" type="file" accept="image/*" onChange={importImage} />
+          <button type="button" className="btn secondary" onClick={requestImageImport} disabled={isImporting}><Icon name={isImporting ? 'LoaderCircle' : 'ImageUp'} size={16} className={isImporting ? 'icon-spin' : undefined} /> {isImporting ? 'Reading image…' : 'Import from image'}</button>
           <button type="button" className="btn primary" onClick={handleAddSubject}><Icon name="Plus" size={16} /> Add new subject</button>
         </div>
       </div>
-      {importMessage && <p className="form-hint import-message" role="status">{importMessage}</p>}
+      <p className="image-crop-tip"><Icon name="ScanLine" size={16} /> For best results, crop the image so the subject code, subject name, class days, and times are clearly visible.</p>
+      {isGuest && <p className="guest-limit-note" role="status">Guests get 3 free image-reading attempts. Remaining: {Math.max(0, 3 - guestUploads)} of 3. Creating an account is free and lets you keep importing schedules and customize your planner.</p>}
+      {importMessage && <p className="form-hint import-message" role="status">{isImporting && <span className="import-wait"><ActivityIndicator label="Reading your schedule image" /></span>}{importMessage}</p>}
 
       <div className="subject-manager-grid">
         <aside className="subject-library panel">
@@ -1214,7 +1703,7 @@ function SubjectsPanel({ subjects, onAddSubject, onSave, onRemove, isSectionLock
               <button type="button" className="btn secondary" onClick={cancelSubjectDetails}>Cancel</button>
             </div>
 
-            <div className="section-list-heading"><div><h3>Sections</h3><p>Each section can have multiple weekly meeting slots.</p></div>
+            <div className="section-list-heading"><div><h3>Sections</h3><p>If a section is full, mark it unavailable so generation can try another. Delete it if it is no longer offered.</p></div>
               <button type="button" className="btn secondary" onClick={addSection}><Icon name="Plus" size={15} /> Add section</button>
             </div>
             <div className="subject-section-list">
@@ -1223,7 +1712,7 @@ function SubjectsPanel({ subjects, onAddSubject, onSave, onRemove, isSectionLock
                 const unavailable = section.unavailable === true || section.available === false
                 return <article key={section.id} className={unavailable ? 'subject-section-card unavailable' : 'subject-section-card'}>
                   <div className="subject-section-card-head">
-                    <div><strong>{section.section_code || 'Untitled section'}</strong><small>{meetings.length} meeting slot(s){unavailable ? ' · Unavailable' : ''}</small></div>
+                    <div><strong>{section.section_code || 'Untitled section'}</strong><small>{meetings.length} meeting day(s){unavailable ? ' · Unavailable' : ''}</small></div>
                     <div className="section-actions">
                       <button type="button" className="btn secondary compact" onClick={() => editSection(section)}><Icon name="Pencil" size={14} /> Edit</button>
                       <button type="button" className="btn secondary compact" onClick={() => onToggleUnavailable(selectedSubject.id, section.id, !unavailable)}>{unavailable ? 'Mark available' : 'Mark unavailable'}</button>
@@ -1231,22 +1720,23 @@ function SubjectsPanel({ subjects, onAddSubject, onSave, onRemove, isSectionLock
                       <button type="button" className="icon-btn danger" title="Delete section" aria-label="Delete section" onClick={() => deleteSection(section.id)}><Icon name="Trash2" size={14} /></button>
                     </div>
                   </div>
-                  <div className="section-meeting-summary">{meetings.map((meeting) => <span key={meeting.id}>{meeting.day} · {fmtTime(meeting.time_start)}–{fmtTime(meeting.time_end)}{meeting.room ? ` · ${meeting.room}` : ''}</span>)}</div>
+                  <div className="section-meeting-summary">{meetings.map((meeting) => <span key={meeting.id}>{meeting.day}{meeting.meeting_date ? ` · ${meeting.meeting_date}` : ''} · {fmtTime(meeting.time_start)}–{fmtTime(meeting.time_end)}{meeting.room ? ` · ${meeting.room}` : ''}</span>)}</div>
                 </article>
               })}
               {!selectedSubject.sections?.length && <p className="subject-pool-empty">No sections yet. Add a section to enter its meeting days and times.</p>}
             </div>
 
             {sectionDraft && <form className="section-edit-form" onSubmit={saveSection}>
-              <div className="section-list-heading"><div><h3>{selectedSubject.sections?.some((section) => section.id === editingSectionId) ? 'Edit section' : 'New section'}</h3><p>Set section details and one or more meeting slots.</p></div></div>
+              <div className="section-list-heading"><div><h3>{selectedSubject.sections?.some((section) => section.id === editingSectionId) ? 'Edit section' : 'New section'}</h3><p>Set section details and its meeting days.</p></div></div>
               <label>Section code<input value={sectionDraft.section_code} onChange={(event) => setSectionDraft({ ...sectionDraft, section_code: event.target.value })} placeholder="e.g. A1" /></label>
               {sectionDraft.meetings.map((meeting) => <div key={meeting.id} className="meeting-slot-editor">
                 <label>Day<select value={meeting.day} onChange={(event) => updateMeeting(meeting.id, { day: event.target.value })}>{DAYS.map((day) => <option key={day} value={day}>{day}</option>)}</select></label>
                 <label>Start<input type="time" value={meeting.time_start} onChange={(event) => updateMeeting(meeting.id, { time_start: event.target.value })} /></label>
                 <label>End<input type="time" value={meeting.time_end} onChange={(event) => updateMeeting(meeting.id, { time_end: event.target.value })} /></label>
-                <button type="button" className="icon-btn danger" title="Delete meeting slot" aria-label="Delete meeting slot" onClick={() => setSectionDraft((current) => ({ ...current, meetings: current.meetings.filter((item) => item.id !== meeting.id) }))}><Icon name="Trash2" size={14} /></button>
+                <label>Room<input value={meeting.room || ''} onChange={(event) => updateMeeting(meeting.id, { room: event.target.value })} placeholder="e.g. 415MB" /></label>
+                <button type="button" className="icon-btn danger" title="Delete meeting day" aria-label="Delete meeting day" onClick={() => setSectionDraft((current) => ({ ...current, meetings: current.meetings.filter((item) => item.id !== meeting.id) }))}><Icon name="Trash2" size={14} /></button>
               </div>)}
-              <button type="button" className="btn secondary" onClick={addMeeting}><Icon name="Plus" size={15} /> Add meeting slot</button>
+              <button type="button" className="btn secondary" onClick={addMeeting}><Icon name="Plus" size={15} /> Add meeting day</button>
               {sectionError && <p className="form-hint" role="status">{sectionError}</p>}
               <div className="modal-actions"><button type="button" className="btn secondary" onClick={cancelSectionEdit}>Cancel</button><button type="submit" className="btn primary">Save section</button></div>
             </form>}
@@ -1254,14 +1744,42 @@ function SubjectsPanel({ subjects, onAddSubject, onSave, onRemove, isSectionLock
         </div>
       </div>
 
-      {importDraft && <div className="modal-backdrop" onClick={() => setImportDraft(null)}><div className="modal-card import-modal" onClick={(event) => event.stopPropagation()}>
-        <div className="modal-header"><h3>Review imported subject</h3><button type="button" className="icon-btn" onClick={() => setImportDraft(null)}><Icon name="X" size={16} /></button></div>
-        <p className="form-hint">OCR is experimental. Check the extracted information before adding it to your subject pool.</p>
-        <label>Subject name<input value={importDraft.subject_name} onChange={(event) => setImportDraft({ ...importDraft, subject_name: event.target.value })} /></label>
-        <label>Subject code<input value={importDraft.subject_code} onChange={(event) => setImportDraft({ ...importDraft, subject_code: event.target.value })} /></label>
-        <p className="form-hint">Detected meeting slots: {importDraft.sections.reduce((sum, section) => sum + section.meetings.length, 0)}. You can correct all details after importing.</p>
-        <details className="ocr-text-details"><summary>Show recognized text</summary><pre>{importDraft.recognizedText}</pre></details>
-        <div className="modal-actions"><button type="button" className="btn secondary" onClick={() => setImportDraft(null)}>Cancel</button><button type="button" className="btn primary" onClick={saveImportedSubject}>Save to subject pool</button></div>
+      {importDraft && <div className="modal-backdrop" onClick={clearImportReview}><div className="modal-card import-modal" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-header"><div><p className="eyebrow">Image scan review</p><h3>Check the schedule details</h3></div><button type="button" className="icon-btn" aria-label="Close image review" onClick={clearImportReview}><Icon name="X" size={16} /></button></div>
+        <p className="import-provider"><Icon name="ScanSearch" size={16} /> Read by {importDraft.recognitionProvider}. Compare every value with the original before saving.</p>
+        {importDraft.warnings?.length > 0 && <ul className="ocr-warnings">{importDraft.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
+        <div className="import-review-grid">
+          <figure className="import-source-preview">
+            {importPreviewUrl ? <img src={importPreviewUrl} alt="Original uploaded schedule for comparison" /> : <div className="import-preview-empty">Original image preview unavailable</div>}
+            <figcaption>Original image · confirm days, dates, and time periods here</figcaption>
+          </figure>
+          <div className="import-review-fields">
+            <label>Subject name<input value={importDraft.subject_name} onChange={(event) => setImportDraft({ ...importDraft, subject_name: event.target.value })} />{importDraft.subject_name_evidence && <small className="field-evidence">Image text: “{importDraft.subject_name_evidence}”</small>}</label>
+            <label>Subject code<input value={importDraft.subject_code} onChange={(event) => setImportDraft({ ...importDraft, subject_code: event.target.value })} />{importDraft.subject_code_evidence && <small className="field-evidence">Image text: “{importDraft.subject_code_evidence}”</small>}</label>
+            <div className="import-section-heading"><div><h4>Sections and meeting days</h4><p>Edit any uncertain value before importing.</p></div><button type="button" className="btn secondary compact" onClick={addImportedSection}><Icon name="Plus" size={14} /> Add section</button></div>
+            <div className="import-section-list">
+              {importDraft.sections.map((section) => <article className="import-section-card" key={section.id}>
+                <div className="import-section-card-head"><label>Section code<input value={section.section_code} onChange={(event) => updateImportedSection(section.id, { section_code: event.target.value })} /></label><button type="button" className="icon-btn danger" aria-label={`Remove section ${section.section_code || ''}`} onClick={() => setImportDraft((current) => ({ ...current, sections: current.sections.filter((item) => item.id !== section.id) }))}><Icon name="Trash2" size={14} /></button></div>
+                {section.section_code_evidence && <small className="field-evidence">Image text: “{section.section_code_evidence}”</small>}
+                {section.meetings.map((meeting) => <div className="import-meeting-card" key={meeting.id}>
+                  <div className="import-meeting-fields">
+                    <label>Day<select value={meeting.day || ''} onChange={(event) => updateImportedMeeting(section.id, meeting.id, { day: event.target.value })}><option value="" disabled>Choose day</option>{DAYS.map((day) => <option key={day} value={day}>{day}</option>)}</select>{meeting.day_evidence && <small className="field-evidence">Image text: “{meeting.day_evidence}”</small>}</label>
+                    <label>Date <span className="optional-label">optional</span><input type="date" value={meeting.meeting_date || ''} onChange={(event) => updateImportedMeeting(section.id, meeting.id, { meeting_date: event.target.value })} /></label>
+                    <label>Start<input type="time" value={meeting.time_start || ''} onChange={(event) => updateImportedMeeting(section.id, meeting.id, { time_start: event.target.value })} />{meeting.start_evidence && <small className="field-evidence">Image text: “{meeting.start_evidence}”</small>}</label>
+                    <label>End<input type="time" value={meeting.time_end || ''} onChange={(event) => updateImportedMeeting(section.id, meeting.id, { time_end: event.target.value })} />{meeting.end_evidence && <small className="field-evidence">Image text: “{meeting.end_evidence}”</small>}</label>
+                    <label>Room<input value={meeting.room || ''} onChange={(event) => updateImportedMeeting(section.id, meeting.id, { room: event.target.value })} placeholder="e.g. 415MB" />{meeting.room_evidence && <small className="field-evidence">Image text: “{meeting.room_evidence}”</small>}</label>
+                    <button type="button" className="icon-btn danger" aria-label="Remove meeting" onClick={() => updateImportedSection(section.id, { meetings: section.meetings.filter((item) => item.id !== meeting.id) })}><Icon name="Trash2" size={14} /></button>
+                  </div>
+                </div>)}
+                <button type="button" className="btn secondary compact" onClick={() => updateImportedSection(section.id, { meetings: [...section.meetings, { id: uid('meeting'), day: '', meeting_date: '', time_start: '', time_end: '', room: '' }] })}><Icon name="Plus" size={14} /> Add meeting day</button>
+              </article>)}
+              {!importDraft.sections.length && <p className="form-hint">No sections detected yet. Add a section and enter its visible details to continue.</p>}
+            </div>
+          </div>
+        </div>
+        <details className="ocr-text-details"><summary>Compare recognized text</summary><h4>AI image reading</h4><pre>{importDraft.recognizedText || 'No text transcript was returned.'}</pre>{importDraft.localRawText && <><h4>Local OCR cross-check</h4><pre>{importDraft.localRawText}</pre></>}</details>
+        <label className="import-confirmation"><input type="checkbox" checked={importConfirmed} onChange={(event) => setImportConfirmed(event.target.checked)} /><span>I compared the subject, sections, days, dates, and times with the original image.</span></label>
+        <div className="modal-actions"><button type="button" className="btn secondary" onClick={clearImportReview}>Cancel</button><button type="button" className="btn primary" onClick={saveImportedSubject} disabled={!importConfirmed}>Save reviewed subject</button></div>
       </div></div>}
     </section>
   )
@@ -1306,22 +1824,14 @@ function SettingsPanel({ profile, setProfile, resetSemester, onSave, isSaving })
               </select>
             </label>
           </div>
-          <button type="button" className="btn primary" onClick={onSave} disabled={isSaving}><Icon name="Save" size={15} /> {isSaving ? 'Saving...' : 'Save account'}</button>
+          <button type="button" className="btn primary" onClick={onSave} disabled={isSaving}><Icon name={isSaving ? 'LoaderCircle' : 'Save'} size={15} className={isSaving ? 'icon-spin' : undefined} /> {isSaving ? 'Saving...' : 'Save account'}</button>
         </article>
 
         <article className="settings-card card">
           <h2>Preferences</h2>
           <div className="toggle-list">
-            <label>
-              Email reminders
-              <input type="checkbox" checked={profile.notify_email} onChange={(event) => setProfile({ ...profile, notify_email: event.target.checked })} />
-            </label>
-            <label>
-              Push notifications
-              <input type="checkbox" checked={profile.notify_push} onChange={(event) => setProfile({ ...profile, notify_push: event.target.checked })} />
-            </label>
-            <label>
-              Dark mode
+            <label className="theme-choice">
+              <span>Dark mode</span>
               <input type="checkbox" checked={profile.theme_pref === 'dark'} onChange={(event) => setProfile({ ...profile, theme_pref: event.target.checked ? 'dark' : 'light' })} />
             </label>
           </div>
@@ -1340,32 +1850,27 @@ function ConstraintRail({ constraints, setConstraints, onGenerate, isGenerating,
   return (
     <aside className="constraint-rail card">
       <div className="constraint-head">
-        <h2>Constraints</h2>
+        <h2>Schedule preferences</h2>
         <button type="button" className="btn primary" onClick={onGenerate} disabled={isGenerating}>
-          <Icon name="Sparkles" size={15} /> {isGenerating ? 'Generating…' : 'Generate'}
+          <Icon name={isGenerating ? 'LoaderCircle' : 'Sparkles'} size={15} className={isGenerating ? 'icon-spin' : undefined} /> {isGenerating ? 'Generating…' : 'Generate'}
         </button>
-        <button type="button" className="btn secondary full" onClick={onReset}>Reset constraints</button>
+        {isGenerating && <ActivityIndicator label="Checking section combinations" />}
+        <button type="button" className="btn secondary full" onClick={onReset}>Reset preferences</button>
       </div>
 
       <fieldset>
-        <legend>Time boundaries</legend>
-        <div className="form-grid two">
-          <label>
-            Earliest
-            <select value={constraints.constraint_start} onChange={(event) => setConstraints({ ...constraints, constraint_start: event.target.value })}>
-              {HOURS.map((hour) => (
-                <option key={hour} value={`${String(hour).padStart(2, '0')}:00`}>{`${String(hour).padStart(2, '0')}:00`}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Latest
-            <select value={constraints.constraint_end} onChange={(event) => setConstraints({ ...constraints, constraint_end: event.target.value })}>
-              {HOURS.map((hour) => (
-                <option key={hour} value={`${String(hour).padStart(2, '0')}:00`}>{`${String(hour).padStart(2, '0')}:00`}</option>
-              ))}
-            </select>
-          </label>
+        <legend>Study shift</legend>
+        <div className="break-pref-options">
+          {[
+            { value: 'morning-afternoon', title: 'Morning to afternoon', description: 'Focus classes between 7:00 AM and 5:00 PM' },
+            { value: 'afternoon-evening', title: 'Afternoon to Evening', description: 'Only classes between 1:00 PM and 9:00 PM' },
+            { value: 'balanced', title: 'Balanced (Conflict-Free)', description: 'Use 7:00 AM–9:00 PM and your break preferences' },
+          ].map((option) => (
+            <label key={option.value} className={constraints.study_shift === option.value ? 'break-pref-option selected' : 'break-pref-option'}>
+              <input type="radio" name="study-shift" value={option.value} checked={constraints.study_shift === option.value} onChange={(event) => setConstraints({ ...constraints, study_shift: event.target.value })} />
+              <span><strong>{option.title}</strong><small>{option.description}</small></span>
+            </label>
+          ))}
         </div>
       </fieldset>
 
@@ -1382,14 +1887,11 @@ function ConstraintRail({ constraints, setConstraints, onGenerate, isGenerating,
               className={constraints.break_pref === option.value ? 'break-pref-option selected' : 'break-pref-option'}
             >
               <input
-                type="checkbox"
+                type="radio"
                 name="break-preference"
                 value={option.value}
                 checked={constraints.break_pref === option.value}
-                onChange={(event) => setConstraints({
-                  ...constraints,
-                  break_pref: event.target.checked ? option.value : constraints.break_pref === option.value ? '' : constraints.break_pref,
-                })}
+                onChange={(event) => setConstraints({ ...constraints, break_pref: event.target.value })}
               />
               <span>
                 <strong>{option.value}</strong>
@@ -1400,37 +1902,9 @@ function ConstraintRail({ constraints, setConstraints, onGenerate, isGenerating,
         </div>
       </fieldset>
 
-      <fieldset>
-        <legend>Preferred days</legend>
-        <div className="day-picker">
-          {DAYS.map((day) => (
-            <label key={day}>
-              <input
-                type="checkbox"
-                checked={constraints.preferred_days.includes(day)}
-                onChange={(event) =>
-                  setConstraints({
-                    ...constraints,
-                    preferred_days: event.target.checked
-                      ? [...constraints.preferred_days, day]
-                      : constraints.preferred_days.filter((entry) => entry !== day),
-                  })
-                }
-              />
-              {day.slice(0, 3)}
-            </label>
-          ))}
-        </div>
-      </fieldset>
-
       <label className="constraint-toggle">
         Minimize school days
         <input type="checkbox" checked={constraints.minimize_school_days} onChange={(event) => setConstraints({ ...constraints, minimize_school_days: event.target.checked })} />
-      </label>
-
-      <label>
-        Max consecutive hours
-        <input type="number" min="1" max="12" value={constraints.max_consecutive} onChange={(event) => setConstraints({ ...constraints, max_consecutive: Number(event.target.value) || 1 })} />
       </label>
 
     </aside>

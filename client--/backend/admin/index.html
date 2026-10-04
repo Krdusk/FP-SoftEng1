@@ -5,13 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="robots" content="noindex, nofollow" />
     <title>MyTerm · Admin</title>
+    <script>document.documentElement.dataset.theme = localStorage.getItem('myterm-admin-theme') === 'light' ? 'light' : 'dark'</script>
     <link rel="stylesheet" href="/admin/admin.css" />
   </head>
   <body>
     <main class="shell">
       <section id="login-panel" class="login-panel">
-        <div class="brand-mark">MT</div>
-        <p class="brand-name">MyTerm</p>
+        <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to dark mode">Dark mode</button>
+        <div class="brand-row">
+          <span class="brand-pill" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4M8 2v4M3 10h18M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18h.01"/></svg></span>
+          <strong>MyTerm</strong>
+        </div>
         <p class="brand-tagline">May the Schedule, be with you.</p>
         <p class="eyebrow">Administration portal</p>
         <h1>Welcome back, Admin</h1>
@@ -23,7 +27,7 @@
         <form id="login-form">
           <label>Username<input name="username" autocomplete="username" placeholder="Admin username" required /></label>
           <label>Password<input name="password" type="password" autocomplete="current-password" placeholder="Admin password" required /></label>
-          <button class="primary" type="submit"><span>Sign in to admin</span><span aria-hidden="true">→</span></button>
+          <button id="admin-signin" class="primary" type="submit"><span class="button-label">Sign in to admin</span><span class="button-spinner" aria-hidden="true"></span><span aria-hidden="true">→</span></button>
         </form>
         <p class="login-footnote">Admin sign-in only. Student accounts are created in the planner; if no one has registered yet, the dashboard will show no users.</p>
         <p id="login-error" class="error" role="alert"></p>
@@ -31,17 +35,40 @@
 
       <section id="dashboard" class="dashboard" hidden>
         <header class="topbar">
-          <div><p class="eyebrow">MyTerm</p><h1>Admin overview</h1><p class="dashboard-tagline">May the Schedule, be with you.</p></div>
-          <button id="logout-button" class="secondary" type="button">Sign out</button>
+          <div class="dashboard-brand">
+            <div class="brand-row">
+              <span class="brand-pill" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4M8 2v4M3 10h18M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18h.01"/></svg></span>
+              <strong>MyTerm</strong>
+            </div>
+            <p class="brand-tagline">May the Schedule, be with you.</p>
+            <p class="eyebrow">Administration portal</p>
+            <h1>Admin overview</h1>
+          </div>
+          <div class="top-actions"><button id="dashboard-theme-toggle" class="secondary theme-toggle" type="button">Dark mode</button><button id="logout-button" class="secondary" type="button">Sign out</button></div>
         </header>
         <div class="stats">
           <article class="stat-card"><span>Registered users</span><strong id="user-count">0</strong></article>
           <article class="stat-card"><span>Subjects added</span><strong id="subject-count">0</strong></article>
           <article class="stat-card"><span>Scheduled classes</span><strong id="class-count">0</strong></article>
         </div>
+        <section class="card data-bars" aria-labelledby="planner-data-title">
+          <div class="card-heading"><div><p class="eyebrow">Live account data</p><h2 id="planner-data-title">Planner setup progress</h2></div></div>
+          <div class="data-bar-row"><div><span>Users with subjects</span><strong id="subjects-progress-label">0 / 0</strong></div><div class="data-bar-track"><i id="subjects-progress-bar"></i></div></div>
+          <div class="data-bar-row"><div><span>Users with a saved schedule</span><strong id="schedule-progress-label">0 / 0</strong></div><div class="data-bar-track"><i id="schedule-progress-bar"></i></div></div>
+        </section>
+        <section class="analytics-grid" aria-label="Saved planner data charts">
+          <article class="card analytics-card"><div class="card-heading"><div><p class="eyebrow">MongoDB · users.subjects</p><h2>Popular subjects</h2></div></div><div id="subject-chart" class="analytics-bars"><p class="empty-note">No saved subjects yet.</p></div></article>
+          <article class="card analytics-card"><div class="card-heading"><div><p class="eyebrow">MongoDB · users.schedule</p><h2>Classes by day</h2></div></div><div id="day-chart" class="analytics-bars"><p class="empty-note">No saved classes yet.</p></div></article>
+        </section>
         <div class="content-grid">
           <section class="card users-card">
-            <div class="card-heading"><div><p class="eyebrow">Accounts</p><h2>Registered users</h2></div><button id="refresh-button" class="secondary" type="button">Refresh</button></div>
+            <div class="card-heading"><div><p class="eyebrow">Accounts</p><h2>Registered users</h2></div><div class="account-actions"><button id="add-user-button" class="primary" type="button">Add user</button><button id="refresh-button" class="secondary" type="button">Refresh</button></div></div>
+            <form id="create-user-form" class="admin-user-form" hidden>
+              <label>Full name<input name="name" required /></label><label>Username<input name="username" required /></label>
+              <label>Email<input name="email" type="email" required /></label><label>Temporary password<input name="password" type="password" minlength="6" required /></label>
+              <label>Course<input name="course" /></label><label>Year<input name="year" value="First year" /></label>
+              <div class="account-actions"><button class="primary" type="submit">Create account</button><button id="cancel-create-user" class="secondary" type="button">Cancel</button></div>
+            </form>
             <p id="dashboard-error" class="error" role="alert"></p>
             <div id="user-list" class="user-list"></div>
           </section>
@@ -49,7 +76,7 @@
             <div id="user-detail" class="empty-detail"><div class="detail-icon">↗</div><h2>Select an account</h2><p class="muted">Review its profile, entered subjects, and saved schedule.</p></div>
           </section>
         </div>
-        <footer>Read-only account overview · Passwords and password hashes are never displayed</footer>
+        <footer>Account controls · Passwords and password hashes are never displayed</footer>
       </section>
     </main>
     <script type="module" src="/admin/admin.js"></script>

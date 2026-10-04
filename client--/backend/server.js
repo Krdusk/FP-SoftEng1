@@ -1,6 +1,7 @@
 import multer from 'multer'
 import os from 'node:os'
 import { recognizeImage, parseScheduleText } from './ocr/ocrParser.js'
+import { readScheduleWithVision } from './ocr/visionScheduleReader.js'
 import fs from 'node:fs/promises'
 import express from 'express'
 import { Transform } from 'node:stream'
@@ -9,7 +10,7 @@ import { randomBytes } from 'node:crypto'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import bcrypt from 'bcryptjs'
 import { buildSchedulePlan } from '../src/scheduler.js'
-import { authenticateUser, getAccount, getAdminUser, listAdminUsers, normalizeUsername, registerUser, savePlannerState, storageMode } from './data/store.js'
+import { authenticateUser, deleteAdminUser, getAccount, getAdminAnalytics, getAdminUser, listAdminUsers, normalizeUsername, registerUser, savePlannerState, storageMode, updateAdminUser } from './data/store.js'
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const isProduction = process.env.NODE_ENV === 'production'
@@ -40,16 +41,23 @@ const upload = multer({
       'image/jpeg',
       'image/png',
       'image/webp',
+      'image/avif',
+      'image/gif',
+      'image/tiff',
+      'image/bmp',
+      'image/heic',
+      'image/heif',
     ]
 
     if (!allowedTypes.includes(file.mimetype)) {
-      return callback(new Error('Only JPG, PNG, and WebP images are allowed.'))
+      return callback(new Error('Please upload a JPG, PNG, WebP, AVIF, GIF, TIFF, or BMP image.'))
     }
 
     callback(null, true)
   },
 })
 
+// Dito nililimitahan ang image upload para ligtas at maayos itong ma-process.
 const uploadScheduleImage = (req, res, next) => {
   upload.single('scheduleImage')(req, res, (error) => {
     if (error) {
@@ -123,7 +131,8 @@ app.post('/api/admin/logout', requireAdmin, (req, res) => {
 
 app.get('/api/admin/users', requireAdmin, async (_req, res) => {
   try {
-    res.json({ users: await listAdminUsers() })
+    const [users, analytics] = await Promise.all([listAdminUsers(), getAdminAnalytics()])
+    res.json({ users, analytics })
   } catch (error) {
     console.error(error)
     res.status(503).json({ error: 'Could not load users. Check the MongoDB connection.' })
@@ -138,6 +147,41 @@ app.get('/api/admin/users/:username', requireAdmin, async (req, res) => {
   } catch (error) {
     console.error(error)
     res.status(503).json({ error: 'Could not load this planner. Check the MongoDB connection.' })
+  }
+})
+
+app.post('/api/admin/users', requireAdmin, async (req, res) => {
+  try {
+    const { name, username, email, password, course = '', year = 'First year' } = req.body || {}
+    const user = await registerUser({ name, username, email, password, course, year })
+    res.status(201).json({ ok: true, user: await getAdminUser(user.username) })
+  } catch (error) {
+    const status = /already registered/i.test(error.message) ? 409 : /required|Password must/i.test(error.message) ? 400 : 503
+    res.status(status).json({ error: error.message || 'Could not create user.' })
+  }
+})
+
+app.patch('/api/admin/users/:username', requireAdmin, async (req, res) => {
+  try {
+    const user = await updateAdminUser(req.params.username, req.body || {})
+    if (!user) return res.status(404).json({ error: 'User not found.' })
+    res.json({ ok: true, user })
+  } catch (error) {
+    res.status(/Name is required/i.test(error.message) ? 400 : 503).json({ error: error.message || 'Could not update user.' })
+  }
+})
+
+app.delete('/api/admin/users/:username', requireAdmin, async (req, res) => {
+  try {
+    const deleted = await deleteAdminUser(req.params.username)
+    if (!deleted) return res.status(404).json({ error: 'User not found.' })
+    for (const [token, session] of userSessions) {
+      if (session.username === normalizeUsername(req.params.username)) userSessions.delete(token)
+    }
+    res.json({ ok: true })
+  } catch (error) {
+    console.error(error)
+    res.status(503).json({ error: 'Could not delete user. Check the MongoDB connection.' })
   }
 })
 
@@ -218,14 +262,103 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
 
     console.log('OCR image received:', req.file.originalname)
 
-    const rawText = await recognizeImage(uploadedFilePath)
-    const parsed = parseScheduleText(rawText)
+    // Kasabay ng local OCR ang Gemini para AI ang pangunahing reader at may backup pa rin.
+    const visionPromise = process.env.GEMINI_API_KEY
+      ? readScheduleWithVision(uploadedFilePath, req.file.mimetype).then((value) => ({ value })).catch((error) => ({ error }))
+      : Promise.resolve(null)
+
+    let recognition = { rawText: '', confidence: 0 }
+    let localOcrError = null
+    try {
+      recognition = await recognizeImage(uploadedFilePath)
+    } catch (error) {
+      localOcrError = error
+      console.error('Local OCR error:', error)
+    }
+    let rawText = String(recognition.rawText || '')
+    let parsed = parseScheduleText(rawText)
+    let recognitionConfidence = recognition.confidence
+    let recognitionProvider = 'local OCR'
+    let warnings = [...parsed.warnings]
+    const localRawText = rawText
+    const compactValue = (value) => String(value || '').normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
+    const compactRoom = (value) => compactValue(String(value || '').replace(/^(?:ROOM|RM)\s*[:#-]?\s*/i, ''))
+    const localMeetings = (sections) => sections.flatMap((section) => (section.meetings || []).map((meeting) => [compactValue(section.section_code), meeting.day, meeting.meeting_date || '', meeting.time_start, meeting.time_end, compactRoom(meeting.room)].join('|'))).sort().join(';')
+
+    if (process.env.GEMINI_API_KEY || !rawText.trim() || recognitionConfidence < 70 || !parsed.subject_code || !parsed.subject_name || !parsed.sections.length || !parsed.sections.some((section) => section.meetings.length)) {
+      try {
+        const outcome = visionPromise ? await visionPromise : { value: await readScheduleWithVision(uploadedFilePath, req.file.mimetype) }
+        if (outcome.error) throw outcome.error
+        const vision = outcome.value
+        if (vision.configured) {
+          const visionResult = vision.result
+          const textParsed = parseScheduleText(visionResult.rawText)
+          const visionHasMeetings = visionResult.sections.some((section) => section.meetings.length)
+          const localHasMeetings = parsed.sections.some((section) => section.meetings.length)
+          const meetingsAgree = visionHasMeetings && localHasMeetings && localMeetings(visionResult.sections) === localMeetings(parsed.sections)
+          const localConfidence = recognitionConfidence
+          const visionIsUseful = visionResult.rawText || visionResult.subject_code || visionResult.subject_name || visionResult.sections.length > 0
+          if (visionIsUseful) {
+            const subjectCode = visionResult.subject_code || textParsed.subject_code || parsed.subject_code
+            const subjectName = visionResult.subject_name || textParsed.subject_name || parsed.subject_name
+            const visionWarnings = [...visionResult.warnings]
+            // AI transcription muna ang pinanggagalingan; local parser backup lang kung kulang ang AI structure.
+            const sections = visionResult.sections.length ? visionResult.sections : textParsed.sections.length ? textParsed.sections : parsed.sections
+            if (visionResult.subject_code && parsed.subject_code && compactValue(visionResult.subject_code) !== compactValue(parsed.subject_code)) {
+              visionWarnings.push(`AI vision and local OCR read different subject codes (“${visionResult.subject_code}” and “${parsed.subject_code}”). Compare the code to the image.`)
+            }
+            if (visionResult.subject_name && parsed.subject_name && compactValue(visionResult.subject_name) !== compactValue(parsed.subject_name)) {
+              visionWarnings.push('AI vision and local OCR read different subject names. Compare the name to the image.')
+            }
+            if (visionHasMeetings && localHasMeetings && !meetingsAgree) {
+              visionWarnings.push('AI vision and local OCR found different section, meeting, or room details. Review every section, day, time, and room against the image.')
+            }
+            if (!subjectCode) visionWarnings.push('Subject code was not confidently detected. Check the image and enter the code if needed.')
+            if (!subjectName) visionWarnings.push('Subject name was not confidently detected. Check the image and enter the name if needed.')
+            if (!sections.length) visionWarnings.push('No section identifiers were confidently detected. Add a section manually if needed.')
+            if (!sections.some((section) => section.meetings.length)) visionWarnings.push('No meeting times were confidently detected. Review the recognized text and add times manually if needed.')
+            if (!meetingsAgree) {
+              visionWarnings.push('The image reader could not independently confirm every meeting detail. Compare the editable results with the original image before saving.')
+            }
+            rawText = visionResult.rawText || rawText
+            parsed = {
+              ...visionResult,
+              subject_code: subjectCode,
+              subject_name: subjectName,
+              sections,
+              warnings: [...new Set(visionWarnings)],
+            }
+            warnings = [...parsed.warnings]
+            const aiComplete = Boolean(subjectCode && subjectName && sections.length && sections.every((section) => section.section_code && section.meetings.length))
+            recognitionConfidence = meetingsAgree && aiComplete ? 96 : aiComplete ? 76 : visionHasMeetings ? 61 : localHasMeetings ? localConfidence : 40
+            recognitionProvider = `Gemini vision + local OCR (${vision.model})`
+          }
+        } else {
+          warnings.unshift(rawText.trim()
+            ? 'Local OCR found text but could not map it to schedule rows. Add GEMINI_API_KEY to the backend .env file to enable free-tier AI vision table reading.'
+            : localOcrError
+              ? `Local OCR could not read the image: ${localOcrError.message}. Add GEMINI_API_KEY to the backend .env file to enable AI vision fallback.`
+              : 'Local OCR found no text. Add GEMINI_API_KEY to the backend .env file to enable the AI vision fallback.')
+        }
+      } catch (visionError) {
+        console.error('AI vision fallback error:', visionError)
+        warnings.unshift(rawText.trim()
+          ? `AI vision fallback failed: ${visionError.message}`
+          : `Local OCR found no text and AI vision failed: ${visionError.message}`)
+      }
+    }
+
+    if (recognitionConfidence < 60) warnings.unshift('Recognition confidence is low. Review every code, date, day, and time against the image.')
 
     res.json({
       ok: true,
       originalFileName: req.file.originalname,
       rawText,
+      localRawText,
+      recognitionConfidence: Math.round(recognitionConfidence),
+      recognitionProvider,
       ...parsed,
+      warnings,
     })
   } catch (error) {
     console.error('OCR error:', error)

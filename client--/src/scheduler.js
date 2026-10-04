@@ -1,11 +1,14 @@
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 const DEFAULTS = {
-  constraint_start: '07:00',
-  constraint_end: '21:00',
-  preferred_days: [],
   minimize_school_days: false,
   break_pref: 'Compact',
-  max_consecutive: 12,
+  study_shift: 'morning-afternoon',
+}
+
+const SHIFT_WINDOWS = {
+  'morning-afternoon': { start: '07:00', end: '17:00' },
+  'afternoon-evening': { start: '13:00', end: '21:00' },
+  balanced: { start: '07:00', end: '21:00' },
 }
 
 const toMinutes = (value) => {
@@ -15,28 +18,10 @@ const toMinutes = (value) => {
 }
 
 const overlaps = (first, second) =>
+  (!first.meeting_date || !second.meeting_date || first.meeting_date === second.meeting_date) &&
   first.day === second.day &&
   toMinutes(first.time_start) < toMinutes(second.time_end) &&
   toMinutes(first.time_end) > toMinutes(second.time_start)
-
-const exceedsConsecutiveLimit = (schedule, maximumHours) => {
-  if (!Number.isFinite(Number(maximumHours)) || Number(maximumHours) <= 0) return false
-  const byDay = new Map()
-  for (const entry of schedule) byDay.set(entry.day, [...(byDay.get(entry.day) || []), entry])
-  for (const entries of byDay.values()) {
-    entries.sort((a, b) => toMinutes(a.time_start) - toMinutes(b.time_start))
-    let runStart = NaN
-    let runEnd = NaN
-    for (const entry of entries) {
-      const start = toMinutes(entry.time_start)
-      const end = toMinutes(entry.time_end)
-      if (runEnd === start) runEnd = end
-      else { runStart = start; runEnd = end }
-      if (runEnd - runStart > Number(maximumHours) * 60) return true
-    }
-  }
-  return false
-}
 
 const isValidSection = (section) => {
   const start = toMinutes(section.time_start)
@@ -49,6 +34,12 @@ const sectionMeetings = (section) => {
   return section.day && section.time_start && section.time_end ? [section] : []
 }
 
+const dayFromDate = (value) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return null
+  const [year, month, day] = value.split('-').map(Number)
+  return DAYS[new Date(year, month - 1, day, 12).getDay()]
+}
+
 const makeClasses = (subject, section) => sectionMeetings(section).map((meeting, index) => ({
   id: `${subject.id}-${section.id}-${meeting.id || index}`,
   subject_id: subject.id,
@@ -57,9 +48,10 @@ const makeClasses = (subject, section) => sectionMeetings(section).map((meeting,
   subject_name: subject.subject_name,
   subject_code: subject.subject_code,
   section_code: section.section_code,
-  day: meeting.day,
+  day: dayFromDate(meeting.meeting_date) || meeting.day,
   time_start: meeting.time_start,
   time_end: meeting.time_end,
+  ...(meeting.meeting_date ? { meeting_date: meeting.meeting_date } : {}),
   room: meeting.room || '',
   instructor: meeting.instructor || '',
 }))
@@ -95,49 +87,54 @@ const getMetrics = (schedule, constraints, lockedSections) => {
     ? dayStats.flatMap((stat) => stat.gapLengths)
       .reduce((penalty, gap) => penalty + Math.abs(gap - preferredBreakMinutes) / 60 * 1.5, 0)
     : 0
-  const preferredDayMisses = constraints.preferred_days.length
-    ? schedule.filter((entry) => !constraints.preferred_days.includes(entry.day)).length
-    : 0
   const maxRun = Math.max(0, ...dayStats.map((stat) => stat.longestRun)) / 60
   const lockedMisses = lockedSections.filter((locked) => !schedule.some((entry) => entry.section_id === locked.id)).length
-  const score = Math.max(0, Math.min(100,
-    100 -
-    preferredDayMisses * 7 -
-    days.size * (constraints.minimize_school_days ? 2.5 : 0.5) -
-    breakPreferencePenalty -
-    maxRun * 0.35,
-  ))
+  const shift = SHIFT_WINDOWS[constraints.study_shift] || SHIFT_WINDOWS['morning-afternoon']
+  const outsideShiftMeetings = schedule.filter((entry) => {
+    const start = toMinutes(entry.time_start)
+    const end = toMinutes(entry.time_end)
+    return start < toMinutes(shift.start) || end > toMinutes(shift.end)
+  }).length
+  const score = Math.max(0, Math.min(100, 100 - breakPreferencePenalty))
   return {
     score: Math.round(score),
     complete: true,
     conflicts: conflictCount,
+    outside_shift_meetings: outsideShiftMeetings,
+    break_preference_penalty: Math.round(breakPreferencePenalty * 100) / 100,
     school_days: days.size,
     class_hours: Math.round(hours * 10) / 10,
     gaps: Math.round(gapHours * 10) / 10,
-    preferred_day_misses: preferredDayMisses,
     longest_consecutive_hours: Math.round(maxRun * 10) / 10,
     locked_misses: lockedMisses,
     locked_ids: lockedSections.map((section) => section.id),
   }
 }
 
-const scheduleKey = (schedule) => schedule.map((entry) => entry.section_id).sort().join('|')
+const scheduleKey = (schedule) => [...new Set(schedule.filter((entry) => entry.subject_id).map((entry) => `${entry.subject_id}:${entry.section_id}`))].sort().join('|')
+
+const compareScheduleFit = (first, second, constraints) =>
+  first.metrics.break_preference_penalty - second.metrics.break_preference_penalty ||
+  (constraints.minimize_school_days ? first.metrics.school_days - second.metrics.school_days : 0) ||
+  first.metrics.gaps - second.metrics.gaps ||
+  first.metrics.school_days - second.metrics.school_days
 
 const withinConstraints = (section, constraints) => {
   if (!isValidSection(section)) return false
+  const shift = SHIFT_WINDOWS[constraints.study_shift] || SHIFT_WINDOWS['morning-afternoon']
   const start = toMinutes(section.time_start)
   const end = toMinutes(section.time_end)
-  if (start < toMinutes(constraints.constraint_start) || end > toMinutes(constraints.constraint_end)) return false
-  return true
+  return start >= toMinutes(shift.start) && end <= toMinutes(shift.end)
 }
 
 export function generateScheduleOptions({ subjects = [], schedule = [], constraints: rawConstraints = {}, lockedSections = [], limit = 6 }) {
   const constraints = { ...DEFAULTS, ...rawConstraints }
-  const preferredDays = Array.isArray(constraints.preferred_days) ? constraints.preferred_days : []
-  constraints.preferred_days = preferredDays
   const subjectIssues = []
   const lockedBySubject = new Map()
-  const fixedSchedule = schedule.filter((entry) => !entry?.subject_id && isValidSection(entry))
+  const allFixedSchedule = schedule.filter((entry) => !entry?.subject_id && isValidSection(entry))
+  // Sa generated plan, isinasama lang ang manual class kung pasok din ito sa oras ng shift.
+  const fixedSchedule = allFixedSchedule.filter((entry) => withinConstraints(entry, constraints))
+  const excludedFixedCount = allFixedSchedule.length - fixedSchedule.length
 
   for (const locked of lockedSections) {
     if (!locked?.subject_id || !locked?.id) continue
@@ -147,22 +144,19 @@ export function generateScheduleOptions({ subjects = [], schedule = [], constrai
     lockedBySubject.set(locked.subject_id, locked)
   }
 
-  const choices = subjects.filter((subject) => subject.included !== false).map((subject) => {
+  const choices = subjects.map((subject) => {
     const locked = lockedBySubject.get(subject.id)
     const allSections = Array.isArray(subject.sections) ? subject.sections : []
-    const selectedSectionId = Object.prototype.hasOwnProperty.call(subject, 'selectedSectionId')
-      ? subject.selectedSectionId
-      : locked?.id || (allSections.find((section) => section.available !== false) || allSections[0])?.id
+    // Dapat pasok ang bawat meeting ng section sa eksaktong oras ng napiling shift.
     const sections = allSections
-      .filter((section) => section.id === selectedSectionId)
       .filter((section) => section.unavailable !== true && section.available !== false)
-      .filter((section) => sectionMeetings(section).length > 0 && sectionMeetings(section).every((meeting) => withinConstraints(meeting, constraints)))
+      .filter((section) => sectionMeetings(section).length > 0 && sectionMeetings(section).every((meeting) => isValidSection(meeting) && withinConstraints(meeting, constraints)))
       .filter((section) => !locked || section.id === locked.id)
       .map((section) => ({ section, classes: makeClasses(subject, section) }))
     if (sections.length === 0) {
       const reason = locked
-        ? 'its locked section is unavailable or outside your time limits'
-        : 'no section is selected or the selected section is outside your time boundaries'
+        ? 'its locked section is unavailable or outside the selected study shift'
+      : 'no available section has every meeting inside the selected study shift'
       subjectIssues.push(`${subject.subject_code || subject.subject_name || 'A subject'}: ${reason}.`)
     }
     return { subject, sections }
@@ -181,7 +175,12 @@ export function generateScheduleOptions({ subjects = [], schedule = [], constrai
       const key = scheduleKey(current)
       if (!seen.has(key)) {
         seen.add(key)
-        options.push({ schedule: current, metrics: getMetrics(current, constraints, lockedSections) })
+        const metrics = getMetrics(current, constraints, lockedSections)
+        if (metrics.conflicts === 0) {
+          options.push({ schedule: current, metrics })
+          options.sort((a, b) => compareScheduleFit(a, b, constraints))
+          if (options.length > Math.max(limit * 4, 24)) options.length = Math.max(limit * 4, 24)
+        }
       }
       return
     }
@@ -190,21 +189,23 @@ export function generateScheduleOptions({ subjects = [], schedule = [], constrai
       nodes += 1
       if (nodes > nodeLimit) { searchedAll = false; return }
       const classes = sectionChoice.classes
+      const next = [...current, ...classes]
       const overlapsWithinSection = classes.some((entry, entryIndex) => classes.some((other, otherIndex) => otherIndex > entryIndex && overlaps(entry, other)))
       const overlapsCurrent = classes.some((entry) => current.some((existing) => overlaps(existing, entry)))
-      const next = [...current, ...classes]
-      if (!overlapsWithinSection && !overlapsCurrent && !exceedsConsecutiveLimit(next, constraints.max_consecutive)) {
-        walk(index + 1, next)
-      }
+      // Isinasantabi ang bawat combination na may overlap para puro conflict-free ang options.
+      if (!overlapsWithinSection && !overlapsCurrent) walk(index + 1, next)
       if (!searchedAll) return
     }
   }
   walk(0, fixedSchedule)
 
-  options.sort((a, b) => b.metrics.score - a.metrics.score || a.metrics.gaps - b.metrics.gaps || a.metrics.school_days - b.metrics.school_days)
+  options.sort((a, b) => compareScheduleFit(a, b, constraints))
   return {
     options: options.slice(0, Math.max(1, limit)),
-    issues: options.length ? [] : ['No conflict-free combination satisfies the selected sections and constraints. Try unlocking a section or widening your time limits.'],
+    issues: [
+      ...(excludedFixedCount ? [`${excludedFixedCount} manually added class${excludedFixedCount === 1 ? ' was' : 'es were'} outside the selected study shift and left out of these options.`] : []),
+      ...(!options.length ? ['No complete conflict-free schedule fits every subject inside the selected study shift. Change a section choice or review its imported meeting days and times.'] : []),
+    ],
     searchedAll,
   }
 }
