@@ -12,7 +12,6 @@ const warpStars = Array.from({ length: 72 }, (_, index) => ({
   duration: `${3.2 + (index % 9) * 0.48}s`,
   delay: `${-((index * 19) % 780) / 100}s`,
 }))
-
 const emptyProfile = {
   profile_name: '',
   reg_username: '',
@@ -263,48 +262,18 @@ function ActivityIndicator({ label }) {
   return <span className="activity-indicator" role="status"><span className="activity-orbit" aria-hidden="true"><i /></span><span>{label}</span><span className="activity-track" aria-hidden="true"><i /></span></span>
 }
 
-const trailerScenes = [
-  { kicker: 'A NEW TERM BEGINS', title: 'Your week is wide open.', copy: 'Seven days. Dozens of class sections. One schedule that needs to fit your life.' },
-  { kicker: 'BRING IT ALL TOGETHER', title: 'Every subject. Every meeting.', copy: 'Add the available sections, days, times, and rooms you are considering.' },
-  { kicker: 'FIND YOUR ALIGNMENT', title: 'Make room for what matters.', copy: 'MyTerm compares combinations and checks for time conflicts as it builds your options.' },
-  { kicker: 'YOUR CHOICE, YOUR PLAN', title: 'Choose the week that fits.', copy: 'Compare the alternatives, confirm your favorite, and keep your final calendar.' },
-]
-
 function TrailerOverlay({ onClose }) {
-  const [scene, setScene] = useState(0)
   useEffect(() => {
     const onKeyDown = (event) => { if (event.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onClose])
-  useEffect(() => {
-    if (scene >= trailerScenes.length) return undefined
-    const timer = window.setTimeout(() => setScene((current) => current + 1), 4300)
-    return () => window.clearTimeout(timer)
-  }, [scene])
-
-  const isEndCard = scene >= trailerScenes.length
-  const currentScene = trailerScenes[Math.min(scene, trailerScenes.length - 1)]
 
   return (
     <div className="trailer-backdrop" role="presentation" onClick={onClose}>
-      <section className="trailer-stage" role="dialog" aria-modal="true" aria-label="MyTerm motion trailer" onClick={(event) => event.stopPropagation()}>
-        <div className="trailer-stars" aria-hidden="true">{warpStars.map((star, index) => <i key={index} style={{ '--star-x': star.x, '--star-y': star.y, '--star-size': star.size, '--star-duration': star.duration, '--star-delay': star.delay }} />)}</div>
-        <div className="trailer-planet" aria-hidden="true" />
-        <div className="trailer-calendar" aria-hidden="true">
-          <div className="trailer-calendar-head"><span>TIME</span>{['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'].map((day) => <span key={day}>{day}</span>)}</div>
-          {['09:00', '11:00', '01:00', '03:00'].map((time, row) => <div className="trailer-calendar-row" key={time}><span>{time}</span>{Array.from({ length: 7 }, (_, column) => <span className={(row * 2 + column) % 5 === 1 ? 'trailer-class' : ''} key={column}>{(row * 2 + column) % 5 === 1 ? <i /> : null}</span>)}</div>)}
-        </div>
-        <div className="trailer-topline"><span><Icon name="Orbit" size={16} /> MYTERM · A WEEKLY PLANNER</span><button type="button" className="trailer-close" onClick={onClose}><Icon name="X" size={18} /><span>Skip</span></button></div>
-        {!isEndCard ? (
-          <div className="trailer-copy" key={scene}>
-            <p>{currentScene.kicker}</p><h2>{currentScene.title}</h2><span>{currentScene.copy}</span>
-          </div>
-        ) : (
-          <div className="trailer-endcard"><span className="trailer-logo"><Icon name="CalendarDays" size={24} /></span><p>MYTERM</p><h2>May the Schedule,<br />be with you.</h2><button type="button" className="btn primary" onClick={onClose}>Start planning <Icon name="ArrowRight" size={16} /></button></div>
-        )}
-        <div className="trailer-progress" aria-hidden="true"><i key={scene} className={isEndCard ? 'complete' : ''} /></div>
-        <p className="trailer-caption">A clearer path through your class schedule.</p>
+      <section className="trailer-embed-shell" role="dialog" aria-modal="true" aria-label="MyTerm official trailer" onClick={(event) => event.stopPropagation()}>
+        <iframe className="trailer-embed-frame" src="/myterm-trailer.html" title="MyTerm — Official Trailer" sandbox="allow-scripts" allow="autoplay; fullscreen" allowFullScreen referrerPolicy="no-referrer" />
+        <button type="button" className="trailer-host-close" aria-label="Close trailer" onClick={onClose}><Icon name="X" size={19} /></button>
       </section>
     </div>
   )

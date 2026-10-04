@@ -2386,3 +2386,46 @@ input[type="radio"]:disabled { cursor: not-allowed; opacity: .45; }
   .developer-grid { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
 }
 
+.trailer-embed-shell {
+  position: relative;
+  width: min(1280px, calc(100vw - 44px));
+  height: min(720px, calc(100dvh - 44px));
+  overflow: hidden;
+  border: 1px solid rgba(232, 193, 90, .42);
+  border-radius: 20px;
+  background: #17181a;
+  box-shadow: 0 30px 100px rgba(0, 0, 0, .65);
+}
+
+.trailer-embed-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #17181a;
+}
+
+.trailer-host-close {
+  position: absolute;
+  z-index: 2;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, .3);
+  border-radius: 50%;
+  background: rgba(12, 13, 15, .82);
+  color: #fff;
+  backdrop-filter: blur(8px);
+}
+
+.trailer-host-close:hover { border-color: #e8c15a; background: #25211a; }
+
+@media (max-width: 640px) {
+  .trailer-backdrop { padding: 10px; }
+  .trailer-embed-shell { width: 100%; height: calc(100dvh - 20px); border-radius: 14px; }
+  .trailer-host-close { top: 8px; right: 8px; width: 34px; height: 34px; }
+}
+
