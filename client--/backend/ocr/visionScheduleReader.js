@@ -183,13 +183,14 @@ const normalizeResult = (value) => {
   }
   const subjectName = verifyField(value.subject_name, value.subject_name_evidence, 'Subject name')
   const scheduleEvidence = String(value.schedule_evidence || '').trim()
-  const isSchedule = value.is_schedule === true && containsEvidence(rawText, scheduleEvidence)
-  if (value.is_schedule === true && !isSchedule) addWarning('The image could not be confirmed as a class schedule from its visible text.')
+  const isSchedule = value.is_schedule === true
+  const verifiedScheduleEvidence = isSchedule && containsEvidence(rawText, scheduleEvidence)
+  if (isSchedule && !verifiedScheduleEvidence) addWarning('The AI recognized a possible schedule, but its supporting text needs review.')
   return {
     rawText,
     language: String(value.language || '').trim().slice(0, 60),
     is_schedule: isSchedule,
-    schedule_evidence: isSchedule ? scheduleEvidence : '',
+    schedule_evidence: verifiedScheduleEvidence ? scheduleEvidence : '',
     subject_code: subjectCode.replace(/\s+/g, ' ').slice(0, 60),
     subject_code_evidence: String(value.subject_code_evidence || '').trim(),
     subject_name: subjectName.slice(0, 120),

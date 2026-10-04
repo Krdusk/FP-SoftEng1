@@ -260,7 +260,6 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
   let uploadedFilePath = null
   const requestStartedAt = Date.now()
   let aiScheduleClassification = null
-  let aiScheduleEvidenceVerified = false
 
   try {
     if (!req.file) {
@@ -307,7 +306,6 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
         if (vision.configured) {
           const visionResult = vision.result
           aiScheduleClassification = visionResult.is_schedule
-          aiScheduleEvidenceVerified = Boolean(visionResult.is_schedule && visionResult.schedule_evidence && String(visionResult.rawText || '').includes(visionResult.schedule_evidence))
           const textParsed = parseScheduleText(visionResult.rawText)
           const visionHasMeetings = visionResult.sections.some((section) => section.meetings.length)
           const localHasMeetings = parsed.sections.some((section) => section.meetings.length)
@@ -410,11 +408,15 @@ app.post('/api/ocr/upload', uploadScheduleImage, async (req, res) => {
       }
     }
 
-    const hasSectionMeeting = parsed.sections.some((section) => section.section_code && section.meetings.length)
+    const hasSectionMeeting = parsed.sections.some((section) => section.section_code && section.meetings.some((meeting) => meeting.day && meeting.time_start && meeting.time_end))
     const hasClassContext = /\b(?:class|course|subject|section|timetable|schedule|lecture|laboratory|lab)\b/i.test(rawText)
-    const localScheduleShape = hasSectionMeeting && (parsed.subject_code || parsed.subject_name || hasClassContext)
-    const aiScheduleShape = aiScheduleClassification === true && aiScheduleEvidenceVerified && hasSectionMeeting
-    if (!aiScheduleShape && !localScheduleShape) {
+    const hasDayAndTimeText = /\b(?:SUN(?:DAY)?|MON(?:DAY)?|TUE(?:S?DAY)?|WED(?:NESDAY)?|THU(?:RSDAY)?|FRI(?:DAY)?|SAT(?:URDAY)?)\b/i.test(rawText)
+      && /\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?\s*(?:-|–|—|to|until|through)\s*\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?\b/i.test(rawText)
+    const hasCourseOrSection = Boolean(parsed.subject_code || parsed.subject_name || parsed.sections.some((section) => section.section_code))
+    const hasScheduleClues = hasSectionMeeting || (hasDayAndTimeText && (hasClassContext || hasCourseOrSection))
+    const clearlyNotSchedule = aiScheduleClassification === false && !hasScheduleClues
+    const hasNoScheduleEvidence = aiScheduleClassification === null && !hasScheduleClues
+    if (clearlyNotSchedule || hasNoScheduleEvidence) {
       return res.status(422).json({
         ok: false,
         error: 'This image does not appear to contain a class schedule. Please upload a timetable showing subject or section details with meeting days and times.',
