@@ -1068,7 +1068,7 @@ function App() {
 
       {modal === 'class' && editing && (
         <div className="modal-backdrop" onClick={() => setModal(null)}>
-          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+          <div className="modal-card class-edit-modal" onClick={(event) => event.stopPropagation()}>
             <div className="modal-header">
               <h3>{editing.id ? 'Edit class' : 'Add class'}</h3>
               <button type="button" className="icon-btn" onClick={() => setModal(null)}><Icon name="X" size={16} /></button>

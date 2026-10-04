@@ -2338,6 +2338,48 @@ input[type="radio"]:disabled { cursor: not-allowed; opacity: .45; }
 .developer-card h3 { margin: 0; color: var(--ink); font-size: 1rem; }
 .developer-card p { margin: 0; color: var(--muted); font-size: .82rem; }
 
+.class-edit-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  max-height: calc(100dvh - 48px);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.class-edit-modal .modal-header,
+.class-edit-modal .modal-actions {
+  flex: 0 0 auto;
+}
+
+.class-edit-modal .modal-form {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.class-edit-modal .form-grid {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 2px 8px 10px 2px;
+}
+
+.class-edit-modal .modal-actions {
+  flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+@media (max-width: 620px) {
+  .class-edit-modal {
+    width: 100%;
+    max-height: calc(100dvh - 28px);
+    padding: 16px;
+  }
+}
+
 @media (max-width: 900px) {
   .about-pillars { grid-template-columns: 1fr; }
   .about-pillar { min-height: 0; }
