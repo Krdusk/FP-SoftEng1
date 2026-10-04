@@ -3,7 +3,7 @@
   "functions": {
     "api/index.js": {
       "includeFiles": "{dist/**,backend/admin/**,eng.traineddata}",
-      "maxDuration": 60
+      "maxDuration": 300
     }
   },
   "rewrites": [

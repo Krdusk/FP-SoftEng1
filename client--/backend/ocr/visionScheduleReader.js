@@ -299,9 +299,20 @@ Return every field in the required JSON schema. Use empty strings/arrays when so
   }
   let parsed
   try {
-    parsed = JSON.parse(output)
+    const cleanOutput = output.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
+    try {
+      parsed = JSON.parse(cleanOutput)
+    } catch {
+      const objectStart = cleanOutput.indexOf('{')
+      const objectEnd = cleanOutput.lastIndexOf('}')
+      if (objectStart < 0 || objectEnd <= objectStart) throw new Error('No JSON object was returned.')
+      parsed = JSON.parse(cleanOutput.slice(objectStart, objectEnd + 1))
+    }
   } catch {
-    throw new Error('Vision AI returned an unreadable response.')
+    throw new Error('Vision AI returned invalid schedule data. Try the image again or use a tighter crop.')
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Vision AI returned invalid schedule data. Try the image again or use a tighter crop.')
   }
   return { configured: true, result: normalizeResult(parsed), model }
 }

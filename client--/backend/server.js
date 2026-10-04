@@ -9,7 +9,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import bcrypt from 'bcryptjs'
 import { buildSchedulePlan } from '../src/scheduler.js'
-import { authenticateUser, createSession, deleteAdminUser, deleteSession, deleteUserSessions, getAccount, getAdminAnalytics, getAdminUser, getSession, listAdminUsers, normalizeUsername, registerUser, savePlannerState, storageMode, updateAdminUser } from './data/store.js'
+import { authenticateUser, checkMongoConnection, createSession, deleteAdminUser, deleteSession, deleteUserSessions, getAccount, getAdminAnalytics, getAdminUser, getSession, listAdminUsers, normalizeUsername, registerUser, savePlannerState, storageMode, updateAdminUser } from './data/store.js'
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const isVercel = Boolean(process.env.VERCEL)
@@ -31,7 +31,7 @@ app.use(express.json())
 const upload = multer({
   dest: path.join(os.tmpdir(), 'class-schedule-ocr'),
   limits: {
-    fileSize: isVercel ? 4 * 1024 * 1024 : 10 * 1024 * 1024,
+    fileSize: isVercel ? 3_800_000 : 10 * 1024 * 1024,
     files: 1,
   },
   fileFilter: (_req, file, callback) => {
@@ -185,8 +185,15 @@ app.delete('/api/admin/users/:username', requireAdmin, async (req, res) => {
   }
 })
 
-app.get('/api/health', (req, res) => {
-  res.json({ ok: true, storage: storageMode })
+app.get('/api/health', async (_req, res) => {
+  try {
+    const connected = await checkMongoConnection()
+    if (!connected) return res.status(503).json({ ok: false, storage: storageMode })
+    res.json({ ok: true, storage: storageMode })
+  } catch (error) {
+    console.error('MongoDB health check failed:', error)
+    res.status(503).json({ ok: false, storage: storageMode })
+  }
 })
 
 app.post('/api/auth/register', async (req, res) => {

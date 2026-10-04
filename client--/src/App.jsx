@@ -43,14 +43,14 @@ const toMinutes = (value) => {
 }
 
 const optimizeScheduleImage = async (file) => {
-  const targetBytes = 3_700_000
+  const targetBytes = 3_200_000
   if (file.size <= targetBytes) return file
   if (typeof createImageBitmap !== 'function') throw new Error('This image is larger than the online upload limit. Crop or resize it, then try again.')
 
   const bitmap = await createImageBitmap(file)
   try {
-    let scale = Math.min(1, 2800 / Math.max(bitmap.width, bitmap.height))
-    for (let resizeAttempt = 0; resizeAttempt < 5; resizeAttempt += 1) {
+    let scale = Math.min(1, 2600 / Math.max(bitmap.width, bitmap.height))
+    for (let resizeAttempt = 0; resizeAttempt < 6; resizeAttempt += 1) {
       const canvas = document.createElement('canvas')
       canvas.width = Math.max(1, Math.round(bitmap.width * scale))
       canvas.height = Math.max(1, Math.round(bitmap.height * scale))
@@ -1590,7 +1590,19 @@ function SubjectsPanel({ subjects, onAddSubject, onSave, onRemove, isSectionLock
       const formData = new FormData()
       formData.append('scheduleImage', await optimizeScheduleImage(file))
       const response = await fetch('/api/ocr/upload', { method: 'POST', body: formData })
-      const result = await response.json()
+      const responseText = await response.text()
+      let result
+      try {
+        result = JSON.parse(responseText)
+      } catch {
+        if (response.status === 413 || /FUNCTION_PAYLOAD_TOO_LARGE|payload too large/i.test(responseText)) {
+          throw new Error('This image is too large for online reading. Crop the schedule or choose a smaller image, then try again.')
+        }
+        if (response.status === 504 || /FUNCTION_INVOCATION_TIMEOUT/i.test(responseText)) {
+          throw new Error('Image reading took too long. Try cropping to the schedule table and upload it again.')
+        }
+        throw new Error(`The image-reading service returned an unreadable response (HTTP ${response.status}). Please try again or enter the subject manually.`)
+      }
       if (!response.ok) throw new Error(result.error || `Image recognition failed (${response.status}).`)
       if (!result.rawText?.trim()) {
         setImportMessage(result.warnings?.join(' ') || 'No text was detected. Try a clearer screenshot or enter the subject manually.')
@@ -1623,8 +1635,12 @@ function SubjectsPanel({ subjects, onAddSubject, onSave, onRemove, isSectionLock
         : 'Text was recognized, but no section meeting times were confidently detected. Review the subject details and add section times manually.')
     } catch (error) {
       const message = String(error.message || '')
-      setImportMessage(/failed to fetch|networkerror|load failed/i.test(message)
-        ? 'MyTerm could not reach its image-reading server. Make sure the backend is running at localhost:5173, then try the image again.'
+      const cannotReachServer = /failed to fetch|networkerror|load failed/i.test(message)
+      const isLocalApp = typeof window !== 'undefined' && ['localhost', '127.0.0.1'].includes(window.location.hostname)
+      setImportMessage(cannotReachServer
+        ? isLocalApp
+          ? 'MyTerm could not reach its image-reading server. Make sure the backend is running at localhost:5173, then try the image again.'
+          : 'MyTerm could not reach the online image-reading service. Please try again shortly. If it continues, the deployed API needs attention.'
         : message || 'Image recognition failed. Try a different screenshot or enter the subject manually.')
     } finally {
       setIsImporting(false)

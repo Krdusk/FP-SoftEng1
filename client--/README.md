@@ -64,7 +64,7 @@ Requirements: Node.js `20.19+` or `22.12+`, npm, and a MongoDB server. For a loc
    PORT=5173
    ```
 
-   Account registration, login, and the admin dashboard require MongoDB. If `MONGODB_URI` is missing, `/api/health` reports file storage and those MongoDB-backed features will not work.
+   Account registration, login, and the admin dashboard require MongoDB. `/api/health` checks the MongoDB connection and returns HTTP 503 if MongoDB is missing or unreachable.
 
 3. Configure the separate admin sign-in. Choose an admin password and generate its bcrypt hash:
 
@@ -120,7 +120,7 @@ Deploy MyTerm as a **Node.js web service**, not as a static-only site. The Expre
 
 ### Deployment notes
 
-• MongoDB must accept network connections from the deployed service. Configure the database provider's network access and database user permissions accordingly.
+• MongoDB must accept network connections from the deployed service. Configure the database provider's network access and database user permissions accordingly. If `/api/health` returns HTTP 503, inspect the hosting provider's function logs for the MongoDB connection error, verify `MONGODB_URI` and `MONGODB_DB`, and confirm the database network access rules allow the deployment.
 • Current sign-in sessions are held in the Node.js process memory. A server restart logs users out, and deployments should run as a single app instance unless session storage is moved to a shared store.
 • Do not expose the MongoDB server directly to the public internet. Use a managed database connection with appropriate access controls.
 

@@ -14,6 +14,18 @@ let mongoClientPromise
 
 const defaultStore = () => ({ accounts: {} })
 
+const getMongoClient = async () => {
+  if (!mongoUri) return null
+  if (!mongoClientPromise) {
+    const client = new MongoClient(mongoUri)
+    mongoClientPromise = client.connect().catch((error) => {
+      mongoClientPromise = null
+      throw error
+    })
+  }
+  return mongoClientPromise
+}
+
 const readStore = async () => {
   try {
     return JSON.parse(await fs.readFile(dataPath, 'utf-8'))
@@ -30,12 +42,8 @@ const writeStore = async (store) => {
 }
 
 const getMongoCollection = async () => {
-  if (!mongoUri) return null
-  if (!mongoClientPromise) {
-    const client = new MongoClient(mongoUri)
-    mongoClientPromise = client.connect()
-  }
-  const client = await mongoClientPromise
+  const client = await getMongoClient()
+  if (!client) return null
   const collection = client.db(mongoDbName).collection('users')
   await collection.createIndex({ username: 1 }, { unique: true })
   await collection.createIndex({ email: 1 }, { unique: true, sparse: true })
@@ -43,24 +51,16 @@ const getMongoCollection = async () => {
 }
 
 const getMongoSchedulesCollection = async () => {
-  if (!mongoUri) return null
-  if (!mongoClientPromise) {
-    const client = new MongoClient(mongoUri)
-    mongoClientPromise = client.connect()
-  }
-  const client = await mongoClientPromise
+  const client = await getMongoClient()
+  if (!client) return null
   const collection = client.db(mongoDbName).collection('schedules')
   await collection.createIndex({ username: 1 }, { unique: true })
   return collection
 }
 
 const getMongoSessionsCollection = async () => {
-  if (!mongoUri) return null
-  if (!mongoClientPromise) {
-    const client = new MongoClient(mongoUri)
-    mongoClientPromise = client.connect()
-  }
-  const client = await mongoClientPromise
+  const client = await getMongoClient()
+  if (!client) return null
   const collection = client.db(mongoDbName).collection('sessions')
   await collection.createIndex({ tokenHash: 1 }, { unique: true })
   await collection.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 })
@@ -133,6 +133,13 @@ const withoutMongoId = (account) => {
 export const normalizeUsername = (value) => String(value || '').trim().toLowerCase()
 
 export const storageMode = mongoUri ? 'mongodb' : 'file'
+
+export async function checkMongoConnection() {
+  const client = await getMongoClient()
+  if (!client) return false
+  await client.db(mongoDbName).command({ ping: 1 })
+  return true
+}
 
 export async function getAccount(username) {
   const collection = await getMongoCollection()
